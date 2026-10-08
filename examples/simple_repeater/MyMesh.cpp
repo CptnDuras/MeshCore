@@ -651,6 +651,16 @@ void MyMesh::onAdvertRecv(mesh::Packet *packet, const mesh::Identity &id, uint32
                           const uint8_t *app_data, size_t app_data_len) {
   mesh::Mesh::onAdvertRecv(packet, id, timestamp, app_data, app_data_len); // chain to super impl
 
+#if MAX_ROUTE_CACHE
+  // adverts only get here after their signature has been verified, so the path to this node can be trusted
+  // as the path the advert really took
+  {
+    uint32_t now = getRTCClock()->getCurrentTime();
+    route_cache.expire(now, ROUTE_CACHE_MAX_AGE_SECS);
+    route_cache.learn(id.pub_key, packet->path, packet->path_len, now, (int8_t)(packet->getSNR() * 4));
+  }
+#endif
+
   // if this a zero hop advert (and not via 'Share'), add it to neighbours
   if (packet->getPathHashCount() == 0 && !isShare(packet)) {
     AdvertDataParser parser(app_data, app_data_len);
@@ -785,6 +795,11 @@ bool MyMesh::onPeerPathRecv(mesh::Packet *packet, int sender_idx, const uint8_t 
 
 #define CTL_TYPE_NODE_DISCOVER_REQ   0x80
 #define CTL_TYPE_NODE_DISCOVER_RESP  0x90
+
+void MyMesh::onPingRecv(mesh::Packet* packet, const mesh::PingRequest& req) {
+  if (isHiddenNode()) return;   // this node wishes to NOT be discoverable
+  answerPing(packet, req, ADV_TYPE_REPEATER, _prefs.node_name, 0, ping_limiter);
+}
 
 void MyMesh::onControlDataRecv(mesh::Packet* packet) {
   uint8_t type = packet->payload[0] & 0xF0;    // just test upper 4 bits
@@ -1088,6 +1103,78 @@ bool MyMesh::configSideDetectors(const uint8_t sideDetSFs[], uint8_t num, float 
   return radio_driver.configSideDetectors(sideDetSFs, num, bw);
 }
 #endif
+
+void MyMesh::formatFeaturesReply(char *reply) {
+  char *dp = reply;
+#if MESH_HOP_RETRIES
+  dp += sprintf(dp, "hop-retry:%d (resent %lu, next hop heard %lu) ", MESH_HOP_RETRIES, (unsigned long)getNumHopRetries(),
+                (unsigned long)getNumHopAcks());
+#else
+  dp += sprintf(dp, "hop-retry:off ");
+#endif
+#if MAX_ROUTE_CACHE
+  dp += sprintf(dp, "route-cache:%d/%d ", route_cache.count(), MAX_ROUTE_CACHE);
+#else
+  dp += sprintf(dp, "route-cache:off ");
+#endif
+  strcpy(dp, "ping:on");
+}
+
+void MyMesh::formatRoutesReply(const char* args, char *reply) {
+#if MAX_ROUTE_CACHE
+  uint32_t now = getRTCClock()->getCurrentTime();
+
+  if (strcmp(args, "clear") == 0) {
+    route_cache.clear();
+    strcpy(reply, "OK");
+    return;
+  }
+
+  if (*args) {   // "routes <hex prefix>": show the whole path to one node
+    uint8_t prefix[ROUTE_KEY_SIZE];
+    int hex_len = strlen(args);
+    int bytes = hex_len / 2;
+    if (hex_len % 2 != 0 || bytes < 2 || bytes > ROUTE_KEY_SIZE || !mesh::Utils::fromHex(prefix, bytes, args)) {
+      strcpy(reply, "ERR: usage: routes [clear|<2-8 byte hex id>]");
+      return;
+    }
+    for (int i = 0; i < route_cache.capacity(); i++) {
+      const mesh::RouteEntry* e = route_cache.at(i);
+      if (e && memcmp(e->key, prefix, bytes) == 0) {
+        char hex[2 * MAX_PATH_SIZE + 1];
+        mesh::Utils::toHex(hex, e->path, e->pathBytes());
+        sprintf(reply, "%d hop(s), %dB hashes, %ds ago, snr %d: %s", e->hopCount(), e->hashSize(),
+                (int)(now - e->heard), e->snr, e->hopCount() ? hex : "direct");
+        return;
+      }
+    }
+    strcpy(reply, "not found");
+    return;
+  }
+
+  // newest first, as many as fit in the reply
+  const mesh::RouteEntry* sorted[MAX_ROUTE_CACHE];
+  int n = 0;
+  for (int i = 0; i < route_cache.capacity(); i++) {
+    if (route_cache.at(i)) sorted[n++] = route_cache.at(i);
+  }
+  std::sort(sorted, sorted + n, [](const mesh::RouteEntry* a, const mesh::RouteEntry* b) {
+    return a->heard > b->heard;
+  });
+  char *dp = reply;
+  for (int i = 0; i < n && dp - reply < 134; i++) {
+    char hex[10];
+    mesh::Utils::toHex(hex, sorted[i]->key, 4);
+    if (i > 0) *dp++ = '\n';
+    sprintf(dp, "%s:%d:%d:%d", hex, sorted[i]->hopCount(), (int)(now - sorted[i]->heard), sorted[i]->snr);
+    dp = strchr(dp, 0);
+  }
+  *dp = 0;
+  if (n == 0) strcpy(reply, "(none)");
+#else
+  strcpy(reply, "ERR: route cache not enabled");
+#endif
+}
 
 void MyMesh::formatNeighborsReply(char *reply) {
   char *dp = reply;

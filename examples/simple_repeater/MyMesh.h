@@ -34,6 +34,7 @@
 #include <helpers/StatsFormatHelper.h>
 #include <helpers/TxtDataHelpers.h>
 #include <helpers/RegionMap.h>
+#include <helpers/RouteCache.h>
 #include <helpers/RoutingPolicy.h>
 #include "RateLimiter.h"
 
@@ -58,6 +59,10 @@ struct RepeaterStats {
   uint32_t total_rx_air_time_secs;
   uint32_t n_recv_errors;
 };
+
+#ifndef ROUTE_CACHE_MAX_AGE_SECS
+  #define ROUTE_CACHE_MAX_AGE_SECS  (24 * 60 * 60)
+#endif
 
 struct NeighbourInfo {
   mesh::Identity id;
@@ -96,12 +101,16 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   RegionEntry* recv_pkt_region;
   TransportKey default_scope;
   RateLimiter discover_limiter, anon_limiter;
+  mesh::PingRateLimiter ping_limiter;   // how often this node answers pings
   uint32_t pending_discover_tag;
   unsigned long pending_discover_until;
   bool region_load_active;
   unsigned long dirty_contacts_expiry;
 #if MAX_NEIGHBOURS
   NeighbourInfo neighbours[MAX_NEIGHBOURS];
+#endif
+#if MAX_ROUTE_CACHE
+  mesh::RouteCache<MAX_ROUTE_CACHE> route_cache;   // observation only: nothing forwards using it
 #endif
   CayenneLPP telemetry;
   unsigned long set_radio_at, revert_radio_at;
@@ -172,6 +181,7 @@ protected:
   void onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender_idx, const uint8_t* secret, uint8_t* data, size_t len) override;
   bool onPeerPathRecv(mesh::Packet* packet, int sender_idx, const uint8_t* secret, uint8_t* path, uint8_t path_len, uint8_t extra_type, uint8_t* extra, uint8_t extra_len) override;
   void onControlDataRecv(mesh::Packet* packet) override;
+  void onPingRecv(mesh::Packet* packet, const mesh::PingRequest& req) override;
 
   void sendFloodReply(mesh::Packet* packet, unsigned long delay_millis, uint8_t path_hash_size);
 
@@ -213,6 +223,8 @@ public:
   void dumpLogFile() override;
   void setTxPower(int8_t power_dbm) override;
   void formatNeighborsReply(char *reply) override;
+  void formatRoutesReply(const char* args, char *reply) override;
+  void formatFeaturesReply(char *reply) override;
   void removeNeighbor(const uint8_t* pubkey, int key_len) override;
   void formatStatsReply(char *reply) override;
   void formatRadioStatsReply(char *reply) override;

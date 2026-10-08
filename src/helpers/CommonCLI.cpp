@@ -238,6 +238,10 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
       }
     } else if (memcmp(command, "neighbors", 9) == 0) {
       _callbacks->formatNeighborsReply(reply);
+    } else if (strcmp(command, "features") == 0) {
+      _callbacks->formatFeaturesReply(reply);
+    } else if (strcmp(command, "routes") == 0 || memcmp(command, "routes ", 7) == 0) {
+      _callbacks->formatRoutesReply(command[6] == ' ' ? &command[7] : "", reply);
     } else if (memcmp(command, "neighbor.remove ", 16) == 0) {
       const char* hex = &command[16];
       uint8_t pubkey[PUB_KEY_SIZE];

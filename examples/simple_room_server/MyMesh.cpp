@@ -430,6 +430,11 @@ void MyMesh::getPeerSharedSecret(uint8_t *dest_secret, int peer_idx) {
   }
 }
 
+void MyMesh::onPingRecv(mesh::Packet* packet, const mesh::PingRequest& req) {
+  if (_prefs.advert_interval == 0 && _prefs.flood_advert_interval == 0) return;   // a hidden node does not answer
+  answerPing(packet, req, ADV_TYPE_ROOM, _prefs.node_name, 0, ping_limiter);
+}
+
 void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, const uint8_t *secret,
                             uint8_t *data, size_t len) {
   int i = matching_peer_indexes[sender_idx];

@@ -712,6 +712,11 @@ bool SensorMesh::handleIncomingMsg(ClientInfo& from, uint32_t timestamp, uint8_t
 #define CTL_TYPE_NODE_DISCOVER_REQ   0x80
 #define CTL_TYPE_NODE_DISCOVER_RESP  0x90
 
+void SensorMesh::onPingRecv(mesh::Packet* packet, const mesh::PingRequest& req) {
+  if (_prefs.advert_interval == 0 && _prefs.flood_advert_interval == 0) return;   // a hidden node does not answer
+  answerPing(packet, req, ADV_TYPE_SENSOR, _prefs.node_name, 0, ping_limiter);
+}
+
 void SensorMesh::onControlDataRecv(mesh::Packet* packet) {
   uint8_t type = packet->payload[0] & 0xF0;    // just test upper 4 bits
   if (type == CTL_TYPE_NODE_DISCOVER_REQ && packet->payload_len >= 6) {

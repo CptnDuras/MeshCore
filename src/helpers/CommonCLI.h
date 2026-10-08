@@ -258,6 +258,14 @@ public:
   virtual void removeNeighbor(const uint8_t* pubkey, int key_len) {
     // no op by default
   };
+  // a one-line summary of the optional features compiled into this firmware and what they have done so far
+  virtual void formatFeaturesReply(char *reply) {
+    strcpy(reply, "ERR: not available");
+  }
+  // args: text after "routes" (may be empty); reply must hold at least 160 bytes
+  virtual void formatRoutesReply(const char* args, char *reply) {
+    strcpy(reply, "ERR: route cache not enabled");
+  }
   virtual void formatStatsReply(char *reply) = 0;
   virtual void formatRadioStatsReply(char *reply) = 0;
   virtual void formatPacketStatsReply(char *reply) = 0;

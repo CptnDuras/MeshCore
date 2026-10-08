@@ -175,6 +175,8 @@ protected:
                            uint8_t len, uint8_t *reply) override;
   void onContactResponse(const ContactInfo &contact, const uint8_t *data, uint8_t len) override;
   void onControlDataRecv(mesh::Packet *packet) override;
+  void onPingRecv(mesh::Packet *packet, const mesh::PingRequest &req) override;
+  void onPingRespRecv(mesh::Packet *packet, const mesh::PingResponse &resp) override;
   void onRawDataRecv(mesh::Packet *packet) override;
   void onTraceRecv(mesh::Packet *packet, uint32_t tag, uint32_t auth_code, uint8_t flags,
                    const uint8_t *path_snrs, const uint8_t *path_hashes, uint8_t path_len) override;
@@ -254,6 +256,7 @@ private:
   uint32_t _active_ble_pin;
   bool _iter_started;
   bool _cli_rescue;
+  mesh::PingRateLimiter ping_limiter;   // how often this client answers pings (when it is visible)
   bool send_unscoped;   // force un-scoped flood (instead of using send_scope)
   char cli_command[80];
   char reply_buf[166];

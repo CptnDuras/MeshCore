@@ -1,6 +1,18 @@
 #pragma once
 
 #include <Dispatcher.h>
+#include <helpers/HopRetryTable.h>
+#include <helpers/PingProtocol.h>
+
+// Hop-by-hop retransmission of unicast (DIRECT) packets: after sending a packet on to the next repeater, listen
+// for that repeater passing it along; if it is not heard, send it again, up to this many times. 0 disables the
+// feature entirely (nothing is compiled in).
+#ifndef MESH_HOP_RETRIES
+  #define MESH_HOP_RETRIES  0
+#endif
+#ifndef MESH_HOP_PENDING
+  #define MESH_HOP_PENDING  4    // packets waited on at once
+#endif
 
 namespace mesh {
 
@@ -28,6 +40,14 @@ class Mesh : public Dispatcher {
   RTCClock* _rtc;
   RNG* _rng;
   MeshTables* _tables;
+
+#if MESH_HOP_RETRIES
+  HopRetryTable<MESH_HOP_PENDING> _hop_retry;
+  uint32_t n_hop_retries, n_hop_acks;
+  uint32_t hopWaitMillis(int len_bytes) const;
+  void trackHopForward(const Packet* pkt, uint8_t priority, uint32_t delay_millis);
+  void serviceHopRetries();
+#endif
 
   void removeSelfFromPath(Packet* packet);
   void routeDirectRecvAcks(Packet* packet, uint32_t delay_millis);
@@ -141,6 +161,25 @@ protected:
   virtual void onControlDataRecv(Packet* packet) { }
 
   /**
+   * \brief  A PING request has arrived. Pings are zero-hop, so the sender is in direct radio range of this node.
+   *         Sub-classes that want to answer call answerPing().
+   */
+  virtual void onPingRecv(Packet* packet, const PingRequest& req) { }
+
+  /**
+   * \brief  A reply to a ping this node sent has arrived.
+   */
+  virtual void onPingRespRecv(Packet* packet, const PingResponse& resp) { }
+
+  /**
+   * \brief  Answer a PING if this node's kind was asked for, the dice say so, and the rate limit allows it.
+   *         The answer goes straight back (zero-hop) after a random delay within the window the request asked for.
+   * \param  node_type  one of ADV_TYPE_*
+   */
+  void answerPing(const Packet* packet, const PingRequest& req, uint8_t node_type, const char* name,
+                  uint8_t fw_ver, PingRateLimiter& limiter);
+
+  /**
    * \brief  A packet with PAYLOAD_TYPE_RAW_CUSTOM has been received.
   */
   virtual void onRawDataRecv(Packet* packet) { }
@@ -169,7 +208,15 @@ protected:
   Mesh(Radio& radio, MillisecondClock& ms, RNG& rng, RTCClock& rtc, PacketManager& mgr, MeshTables& tables)
     : Dispatcher(radio, ms, mgr), _rng(&rng), _rtc(&rtc), _tables(&tables)
   {
+#if MESH_HOP_RETRIES
+    n_hop_retries = n_hop_acks = 0;
+#endif
   }
+
+#if MESH_HOP_RETRIES
+  uint32_t getNumHopRetries() const { return n_hop_retries; }   // unicast packets sent again
+  uint32_t getNumHopAcks() const { return n_hop_acks; }         // times the next hop was heard passing one on
+#endif
 
   MeshTables* getTables() const { return _tables; }
 

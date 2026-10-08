@@ -122,6 +122,29 @@ This document provides an overview of CLI commands that can be sent to MeshCore 
 
 ---
 
+### Which optional features are in this firmware (repeater only)
+
+**Usage:** `features`
+
+Reports, in one line, whether hop-by-hop retransmission and the route cache are compiled in, and what they have done since
+boot, for example `hop-retry:2 (resent 5, next hop heard 118) route-cache:12/32 ping:on`. `resent` is how many unicast
+packets were sent again because the next repeater was not heard passing them on; `next hop heard` is how many times it was.
+`off` means the feature is not in this build.
+
+---
+
+### Routes learned from adverts (repeater only, optional build)
+
+Only present in firmware built with `-D MAX_ROUTE_CACHE=<n>` (for example 32). The repeater records the path every verified
+advert took to reach it. This is observation only: nothing forwards using it yet.
+
+**Usage:**
+- `routes` (nodes, newest first, as `id:hops:seconds_ago:snr`)
+- `routes <hex id>` (the whole path to one node, at least 2 bytes of its public key)
+- `routes clear`
+
+---
+
 ### Discover zero hop neighbors
 
 **Usage:** 

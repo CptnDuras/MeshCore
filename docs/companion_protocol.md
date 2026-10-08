@@ -452,6 +452,46 @@ Byte 0: 0x14
 
 ---
 
+### Pinging nearby nodes
+
+Ask every MeshCore node within radio range to say who it is. Nothing is forwarded or repeated: only nodes that can hear the
+companion radio directly can answer, so this shows the immediate neighbourhood. The packet formats (`PING_REQ`, `PING_RESP`) are
+in [payloads.md](payloads.md).
+
+1. Send `CMD_SEND_CONTROL_DATA` (55) with the `PING_REQ` bytes after the command byte:
+
+   ```
+   Byte 0:    0x37  (CMD_SEND_CONTROL_DATA)
+   Byte 1:    0xA0  (PING_REQ)
+   Byte 2:    type_filter   0xFF = everyone, or a bit per node type: 1 client, 2 repeater, 3 room, 4 sensor  (1 << type)
+   Bytes 3-6: tag           random; used to match answers to this request
+   Byte 7:    probability   255 = every node answers; lower thins the answers (useful in a crowd)
+   Byte 8:    window_s      seconds to spread the answers over; 0 = 3 s. Use about 0.3 s per person you expect, up to 60
+   ```
+
+   The device replies `RESP_CODE_OK` (or `ERR_CODE_TABLE_FULL` if it is out of packet buffers).
+
+2. Each answer arrives as a `PUSH_CODE_CONTROL_DATA` (0x8E) frame:
+
+   ```
+   Byte 0:    0x8E
+   Byte 1:    snr * 4  (signed)  - how well the app's radio heard this answer
+   Byte 2:    rssi     (signed)
+   Byte 3:    path_len (0 for a direct answer)
+   Byte 4..:  the PING_RESP payload (flags 0xB? with node type in the low 4 bits, snr, tag, fw_ver, pubkey[8], name_len, name)
+   ```
+
+   Ignore frames whose `tag` is not the one you sent: answers to someone else's ping in range are delivered too.
+
+   Both SNR values are useful: the one in the payload is how the *answering* node heard *your* request, and the one in the
+   push frame is how *you* heard its answer.
+
+To let other people's pings list this client, send `CMD_SET_OTHER_PARAMS` (38) with a sixth byte: `1` = visible, `0` = hidden
+(the default). It is saved on the device. Firmware that supports pings also reports the setting as the last byte (offset 82) of the
+`RESP_CODE_DEVICE_INFO` frame, so an app can tell both whether pings are supported (the frame is at least 83 bytes long) and the current state. Repeaters, room servers and sensors answer pings unless they are hidden nodes.
+
+Answering is rate limited to 4 pings per 2 minutes per node, so repeating a ping quickly will find fewer nodes the second time.
+
 ## Channel Management
 
 ### Channel Types

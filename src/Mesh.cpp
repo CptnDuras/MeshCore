@@ -9,7 +9,57 @@ void Mesh::begin() {
 
 void Mesh::loop() {
   Dispatcher::loop();
+#if MESH_HOP_RETRIES
+  serviceHopRetries();
+#endif
 }
+
+#if MESH_HOP_RETRIES
+// How long to wait for the next repeater to pass a packet on: its turn to hear us, our packet's airtime, and
+// its turn to send.
+uint32_t Mesh::hopWaitMillis(int len_bytes) const {
+  return _radio->getEstAirtimeFor(len_bytes) * 3 + 600;
+}
+
+// Remember a unicast packet we have just sent on, so we can send it again if the next repeater is not heard
+// passing it along. A packet with no hops left is on its last leg (to the destination, which does not forward),
+// so there is nobody to overhear.
+void Mesh::trackHopForward(const Packet* pkt, uint8_t priority, uint32_t delay_millis) {
+  uint8_t count = pkt->getPathHashCount();
+  if (count == 0) return;
+  uint8_t type = pkt->getPayloadType();
+  if (type == PAYLOAD_TYPE_TRACE || type == PAYLOAD_TYPE_MULTIPART) return;
+
+  uint8_t hash[MAX_HASH_SIZE];
+  pkt->calculatePacketHash(hash);
+  uint8_t raw[MAX_TRANS_UNIT];
+  uint8_t len = pkt->writeTo(raw);
+  _hop_retry.track(hash, count - 1, raw, len, priority, _ms->getMillis() + delay_millis + hopWaitMillis(len));
+}
+
+void Mesh::serviceHopRetries() {
+  uint32_t now = _ms->getMillis();
+  int slot = _hop_retry.nextDue(now);
+  if (slot < 0) return;
+  const auto* e = _hop_retry.at(slot);
+  if (e->tries >= MESH_HOP_RETRIES) {   // asked enough times: give up on this hop
+    _hop_retry.release(slot);
+    return;
+  }
+  if (_mgr->getFreeCount() < 2) return;   // keep the last packet buffers for traffic we are receiving
+  Packet* p = obtainNewPacket();
+  if (p == NULL) return;
+  if (!p->readFrom(e->raw, e->raw_len)) {
+    releasePacket(p);
+    _hop_retry.release(slot);
+    return;
+  }
+  uint32_t jitter = _rng->nextInt(0, 400);
+  sendPacket(p, e->priority, jitter);
+  _hop_retry.retried(slot, now + jitter + hopWaitMillis(e->raw_len));
+  n_hop_retries++;
+}
+#endif
 
 bool Mesh::allowPacketForward(const mesh::Packet* packet) { 
   return false;  // by default, Transport NOT enabled
@@ -39,6 +89,14 @@ int Mesh::searchChannelsByHash(const uint8_t* hash, GroupChannel channels[], int
 }
 
 DispatcherAction Mesh::onRecvPacket(Packet* pkt) {
+#if MESH_HOP_RETRIES
+  if (pkt->isRouteDirect() && _hop_retry.count() > 0) {
+    // is this the next repeater passing along a packet we sent on? Same hash, one hop shorter.
+    uint8_t h[MAX_HASH_SIZE];
+    pkt->calculatePacketHash(h);
+    if (_hop_retry.overheard(h, pkt->getPathHashCount())) n_hop_acks++;
+  }
+#endif
   if (pkt->isRouteDirect() && pkt->getPayloadType() == PAYLOAD_TYPE_TRACE) {
     if (pkt->path_len < MAX_PATH_SIZE) {
       uint8_t i = 0;
@@ -69,7 +127,15 @@ DispatcherAction Mesh::onRecvPacket(Packet* pkt) {
 
   if (pkt->isRouteDirect() && pkt->getPayloadType() == PAYLOAD_TYPE_CONTROL && (pkt->payload[0] & 0x80) != 0) {
     if (pkt->getPathHashCount() == 0) {
-      onControlDataRecv(pkt);
+      PingRequest rq;
+      PingResponse rs;
+      if (pingDecodeRequest(pkt->payload, pkt->payload_len, rq)) {
+        onPingRecv(pkt, rq);
+      } else if (pingDecodeResponse(pkt->payload, pkt->payload_len, rs)) {
+        onPingRespRecv(pkt, rs);
+      } else {
+        onControlDataRecv(pkt);
+      }
     }
     // just zero-hop control packets allowed (for this subset of payloads)
     return ACTION_RELEASE;
@@ -103,6 +169,9 @@ DispatcherAction Mesh::onRecvPacket(Packet* pkt) {
         removeSelfFromPath(pkt);
 
         uint32_t d = getDirectRetransmitDelay(pkt);
+#if MESH_HOP_RETRIES
+        trackHopForward(pkt, 0, d);
+#endif
         return ACTION_RETRANSMIT_DELAYED(0, d);  // Routed traffic is HIGHEST priority 
       }
     }
@@ -618,6 +687,29 @@ Packet* Mesh::createTrace(uint32_t tag, uint32_t auth_code, uint8_t flags) {
   return packet;
 }
 
+void Mesh::answerPing(const Packet* packet, const PingRequest& req, uint8_t node_type, const char* name,
+                      uint8_t fw_ver, PingRateLimiter& limiter) {
+  if (!pingShouldRespond(req, node_type, (uint8_t)_rng->nextInt(0, 256))) return;
+  if (!limiter.allow(_rtc->getCurrentTime())) return;
+
+  PingResponse r;
+  memset(&r, 0, sizeof(r));
+  r.node_type = node_type;
+  r.snr_x4 = packet->_snr;
+  r.tag = req.tag;
+  r.fw_ver = fw_ver;
+  memcpy(r.pubkey_prefix, self_id.pub_key, sizeof(r.pubkey_prefix));
+  if (name) strncpy(r.name, name, PING_MAX_NAME);
+
+  uint8_t buf[PING_RESP_MIN_LEN + PING_MAX_NAME];
+  size_t n = pingEncodeResponse(r, buf);
+  Packet* resp = createControlData(buf, n);
+  if (resp == NULL) return;
+
+  // straight back to whoever asked (they are in range, or we would not have heard them), after a random delay
+  sendZeroHop(resp, pingResponseDelayMs(req, _rng->nextInt(0, 60000)));
+}
+
 Packet* Mesh::createControlData(const uint8_t* data, size_t len) {
   if (len > sizeof(Packet::payload)) return NULL;  // invalid arg
 
@@ -711,6 +803,9 @@ void Mesh::sendDirect(Packet* packet, const uint8_t* path, uint8_t path_len, uin
     }
   }
   _tables->markSeen(packet); // mark this packet as already sent in case it is rebroadcast back to us
+#if MESH_HOP_RETRIES
+  if (packet->getPayloadType() != PAYLOAD_TYPE_TRACE) trackHopForward(packet, pri, delay_millis);
+#endif
   sendPacket(packet, pri, delay_millis);
 }
 
