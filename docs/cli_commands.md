@@ -234,7 +234,7 @@ advert took to reach it. This is observation only: nothing forwards using it yet
 
 **Set by build flag:** `LORA_FREQ`, `LORA_BW`, `LORA_SF`, `LORA_CR`
 
-**Default:** `869.618,62.5,8,5`
+**Default:** `910.525,62.5,7,5` in this build (the US preset). Upstream's default is `869.618,62.5,8,5`. Only a fresh or erased node starts from the default; a node with saved settings keeps them.
 
 **Note:** Requires reboot to apply
 
