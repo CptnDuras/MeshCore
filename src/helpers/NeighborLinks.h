@@ -39,6 +39,16 @@ static inline int linkSnrFloor4(int sf) {
   return -30 - 10 * (sf - 7);
 }
 
+// the cost for a single SNR reading (x4), without smoothing or hysteresis: for links we only hear once at a time, such as a client's check-in
+static inline uint8_t linkCostFromSnr4(int snr4, int sf) {
+  int margin4 = snr4 - linkSnrFloor4(sf);
+  if (margin4 >= 40) return 1;
+  if (margin4 >= 20) return 2;
+  if (margin4 >= 8) return 3;
+  if (margin4 >= 0) return 5;
+  return LINK_NOT_USABLE;
+}
+
 template <int CAPACITY>
 class NeighborLinks {
   LinkInfo links[CAPACITY];
