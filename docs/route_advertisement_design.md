@@ -204,3 +204,60 @@ Limits of this evidence: the radio model is simple, the topology is made up, tra
 paths are invented, and the
 firmware's actual timeouts and retry behaviour for direct messages were only approximated. Real traces from a
 repeater (the `routes` CLI command) should be used to check the assumptions before building more.
+
+## 10. Client check-in with a TTL (meshsim, 10 seeds, 24 h run, last 12 h measured)
+
+Idea: a client tells the repeaters it can hear, now and then ("check-in", a ~16 byte zero-hop broadcast), and how long to
+believe it (TTL = 2.5 x its check-in period). A repeater records each client as *attached*. When the TTL runs out
+without a new check-in the repeater forgets the client, marks it unreachable (cost 255) with the next odd sequence number,
+and sends a route advert straight away (at most one per `trigger_min_s`). Repeaters advertise attached clients along with
+repeater routes; a client's sequence number is its own check-in counter (even), so a newer location beats an older one and a
+withdrawal can never override a later check-in. Senders address the destination client; each repeater forwards by its table, and
+the repeater the client is attached to delivers it. No route: drop, and the sender floods as before.
+
+Scenario: two towns, 12 travelling clients, unicast tries 2, hop retries 2, 6 s timeout. "Route right" is sampled every 5 min:
+walk the next-hop pointers from each repeater toward each travelling client and see if they end at its true repeater.
+
+| variant | delivered | to/from travellers | messages flooded | control airtime | routes right / stale / missing |
+|---|---|---|---|---|---|
+| flood only | 76.7% | 42.7% | 100% | 3% | n/a |
+| cached paths (today) | 77.3% | 42.1% | 65% | 13% | n/a |
+| routed, home learned from floods | 83.7% | 47.4% | 50% | 18% | n/a |
+| client routes, no check-ins | 70.7% | 34.3% | 100% | 13% | 0 / 0 / 100% |
+| check-in 5 min | 81.6% | 46.9% | 53% | 36% | 70 / 10 / 20% |
+| check-in 15 min | 82.2% | 47.6% | 53% | 35% | 59 / 20 / 21% |
+| check-in 30 min | 82.0% | 48.0% | 54% | 34% | 47 / 29 / 24% |
+| check-in 60 min | 81.5% | 44.9% | 55% | 34% | 34 / 43 / 23% |
+| 15 min + check in when moving | 82.3% | 48.0% | 53% | 36% | 74 / 13 / 13% |
+| 15 min, TTL 1.5 x | 81.3% | 46.8% | 58% | 35% | 56 / 14 / 30% |
+| 15 min, TTL 4 x | 82.3% | 48.0% | 52% | 35% | 61 / 22 / 17% |
+| 15 min + move, adverts >= 10 s apart | 82.2% | 49.1% | 54% | 46% | 79 / 11 / 10% |
+| 15 min + move, full adverts every 30 min | 83.0% | 48.0% | 52% | 29% | 77 / 12 / 12% |
+| HYBRID: travellers only, 15 min + move | 83.1% | 50.5% | 51% | 24% | 80 / 11 / 9% |
+| HYBRID, full adverts every 30 min | 83.2% | 49.9% | 50% | 16% | 77 / 12 / 11% |
+| HYBRID, 5 min + move, full every 30 min | 83.4% | 50.7% | 50% | 19% | 78 / 6 / 16% |
+
+What it says:
+
+1. **The mechanism works as designed** (unit tests): attach on check-in, withdrawal when the TTL ends, a later check-in beats a
+   withdrawal, a handover makes the old repeater let go and the new one take over, triggered adverts carry only what changed.
+2. **A 15 minute check-in is a sensible setting for mobile companions**, but only with a check-in on handover. Route accuracy
+   to travellers goes 59% (15 min alone) to 74% (with a check-in when the best repeater changes); the period alone barely
+   moves delivery (81.5-82.3% for 5-60 min).
+3. **Check-ins alone do not beat what we already have.** The existing routed mode (home learned from floods) reaches 83.7%
+   with no check-ins at all. Client routes need the check-ins to work (0% correct without them), and then roughly match it.
+   The gain shows up only for traffic involving travellers: 47.4% -> 48-50.7%, within noise for single settings but
+   consistent across the hybrid rows.
+4. **Do it for travellers only.** Having every client check in and every repeater advertise every client is what costs
+   control airtime (36-47% of all airtime). Limiting client routes to mobile clients (the client marks itself mobile) cut that
+   to 16-24% and gave the best numbers, because static clients' homes are already learned from their own traffic.
+5. **Triggered adverts must be rate-limited and the full table sent rarely.** Letting triggered adverts out every 10 s raised
+   route accuracy a little but added 20% to airtime; full adverts every 30 min with incremental adverts in between lowered
+   control airtime from 36% to 29% with the same accuracy.
+6. **TTL**: 1.5 x loses a missed check-in (30% missing routes); 2.5 x to 4 x are similar. 2.5 x is fine.
+7. **The ceiling is still coverage.** Travellers are out of every repeater's reach part of the time; no routing scheme can fix
+   that. With no travellers, client routes were slightly worse than the existing routed mode (93.6% vs 95.3%).
+
+Recommended shape if built: opt-in `checkin` for mobile companions only (default 15 min, plus on handover), repeater keeps a
+small attach table (TTL 2.5 x the period the client states in the check-in), advertises attached clients incrementally,
+withdraws on expiry, full table every 30 min.
