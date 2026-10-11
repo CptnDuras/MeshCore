@@ -60,6 +60,9 @@ struct RepeaterStats {
   uint32_t n_recv_errors;
 };
 
+#ifndef MAX_ROUTE_CACHE
+  #define MAX_ROUTE_CACHE  32   // paths remembered from adverts; switched on and off at runtime (set routecache on|off)
+#endif
 #ifndef ROUTE_CACHE_MAX_AGE_SECS
   #define ROUTE_CACHE_MAX_AGE_SECS  (24 * 60 * 60)
 #endif
@@ -109,9 +112,19 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
 #if MAX_NEIGHBOURS
   NeighbourInfo neighbours[MAX_NEIGHBOURS];
 #endif
-#if MAX_ROUTE_CACHE
   mesh::RouteCache<MAX_ROUTE_CACHE> route_cache;   // observation only: nothing forwards using it
-#endif
+
+  // route tables and adverts: created when route.enable is on, gone when it is off (so they cost no memory while off)
+  typedef mesh::RoutingCore<16, 64, 128> Router;
+  Router* routing;
+  mesh::RouteConfigValues routing_applied;   // the settings the running router was built from
+  uint64_t mono_total_ms;                    // monotonic milliseconds since start, immune to the clock being set
+  uint32_t mono_last_ms;
+  uint32_t next_routing_ms, next_expire_s;
+  uint32_t monoSeconds();
+  void applyFeatureConfig();
+  void serviceRouting();
+  void sendRouteAdv(const mesh::RouteAdv& adv);
   CayenneLPP telemetry;
   unsigned long set_radio_at, revert_radio_at;
   float pending_freq;
@@ -224,6 +237,9 @@ public:
   void setTxPower(int8_t power_dbm) override;
   void formatNeighborsReply(char *reply) override;
   void formatRoutesReply(const char* args, char *reply) override;
+  void formatRouteReply(const char* args, char *reply) override;
+  void formatAttachedReply(const char* args, char *reply) override;
+  void onFeatureConfigChanged() override;
   void formatFeaturesReply(char *reply) override;
   void removeNeighbor(const uint8_t* pubkey, int key_len) override;
   void formatStatsReply(char *reply) override;

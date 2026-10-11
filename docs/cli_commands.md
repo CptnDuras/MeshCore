@@ -122,26 +122,61 @@ This document provides an overview of CLI commands that can be sent to MeshCore 
 
 ---
 
-### Which optional features are in this firmware (repeater only)
+### Which optional features are on, and what they have done (repeater only)
 
 **Usage:** `features`
 
-Reports, in one line, whether hop-by-hop retransmission and the route cache are compiled in, and what they have done since
-boot, for example `hop-retry:2 (resent 5, next hop heard 118) route-cache:12/32 ping:on`. `resent` is how many unicast
-packets were sent again because the next repeater was not heard passing them on; `next hop heard` is how many times it was.
-`off` means the feature is not in this build.
+All of these features are in every build and are switched at runtime, with the settings below. The reply is one line, for example
+`hop-retry:2 (resent 5, next hop heard 118) route-cache:12/32 ping:on route:on (neighbours 3, clients 2, routes 9)`. `resent` is how
+many unicast packets were sent again because the next repeater was not heard passing them on; `next hop heard` is how many times it
+was. `off` means the feature is switched off.
 
 ---
 
-### Routes learned from adverts (repeater only, optional build)
+### Optional features: settings (repeater only)
 
-Only present in firmware built with `-D MAX_ROUTE_CACHE=<n>` (for example 32). The repeater records the path every verified
-advert took to reach it. This is observation only: nothing forwards using it yet.
+Saved with the other settings; they take effect at once.
+
+- `get hop.retries` / `set hop.retries <0-3>`: after sending a unicast packet to the next repeater, listen for it being passed on and
+  send it again up to this many times if it is not heard. 0 = off. Default 2.
+- `get routecache` / `set routecache <on|off>`: remember the path each verified advert took (the `routes` command). Default on.
+- `get ping` / `set ping <on|off>`: answer zero-hop pings from clients. Default on.
+
+---
+
+### Routes learned from adverts (repeater only)
+
+The repeater records the path every verified advert took to reach it (while `routecache` is on). This is observation only: nothing
+forwards using it.
 
 **Usage:**
-- `routes` (nodes, newest first, as `id:hops:seconds_ago:snr`)
+- `routes` (nodes, newest first, as `id:hops:seconds_ago:snr`; the reply holds only what fits)
 - `routes <hex id>` (the whole path to one node, at least 2 bytes of its public key)
 - `routes clear`
+
+---
+
+### Route tables and route adverts (repeater only, off by default)
+
+A repeater with `route.enable on` keeps a table of the repeaters and checked-in clients it has heard about, sends zero-hop route
+adverts to its neighbours, and listens to theirs. With it off nothing is created and nothing is sent. Nothing forwards using the
+table yet. See the route table specification for the design.
+
+**Settings** (`get route.<name>` / `set route.<name> <value>`; `get route` shows them all):
+- `route.enable <on|off>`: default off
+- `route.id_bytes <2|3|4>`: bytes of a public key used to name a node; every repeater and client on the network must agree. Default 4
+- `route.full_period <0|1800-28800>`: seconds between whole-table adverts, 30 minutes to 8 hours. 0 = use lifetimes instead. Default 3600
+- `route.life <600-32640>`: with `full_period 0`, how long this repeater's own entry is believed. Default 7200
+- `route.refresh <10-95>`: with `full_period 0`, refresh an entry when this percent of its lifetime is left. Default 67
+- `route.min_gap <10-600>`: at most one advert per this many seconds. Default 60
+- `route.repeats <1-3>`: times a change is sent unless a neighbour is heard passing it on. Default 2
+
+Changing a setting other than `route.enable` restarts the route tables (they refill as adverts arrive).
+
+**Views:**
+- `route`: the table, 4-5 lines at a time as `dest>next hop:cost:seconds left`; `route <offset>` for the next page
+- `route stats`: counters (adverts and entries in and out, how many were new, changed, ignored)
+- `attached`: the clients that have checked in here, as `id:seconds left:cost:SNR`; `attached <offset>` for more
 
 ---
 

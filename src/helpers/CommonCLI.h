@@ -8,6 +8,7 @@
 #include <helpers/ConfigSerializer.h>
 #include <helpers/CommonRadioPrefs.h>
 #include <helpers/DynamicConfigSerializer.h>
+#include <helpers/RouteConfig.h>
 
 #if defined(WITH_RS232_BRIDGE) || defined(WITH_ESPNOW_BRIDGE)
 #define WITH_BRIDGE
@@ -72,6 +73,11 @@ public:
   uint8_t loop_detect = 0;
   uint8_t cad_enabled = 0;      // hardware Channel Activity Detection before TX (boolean)
   uint8_t extra_sf[4];
+  // Optional features: all compiled in, all switched here at runtime
+  uint8_t hop_retries = 2;      // times a unicast packet is sent again when the next repeater is not heard passing it on (0 = off, 0-3)
+  uint8_t route_cache_en = 1;   // remember the paths adverts took (the `routes` command)
+  uint8_t ping_en = 1;          // answer zero-hop pings from clients
+  mesh::RouteConfigValues route_cfg;   // route tables and adverts (off by default)
 
 private:
   class RadioPrefs : public CommonRadioPrefs {
@@ -203,6 +209,37 @@ private:
   };
   RoomPrefs room;
 
+  class FeaturePrefs : public ConfigSerializer {
+    NodePrefs* _parent;
+  protected:
+    void structure() override {
+      def("hop", _parent->hop_retries);
+      def("rcache", _parent->route_cache_en);
+      def("ping", _parent->ping_en);
+    }
+  public:
+    FeaturePrefs(NodePrefs* parent) : _parent(parent) { }
+  };
+  FeaturePrefs feat;
+
+  class RoutePrefs : public ConfigSerializer {
+    NodePrefs* _parent;
+  protected:
+    void structure() override {
+      def("en", _parent->route_cfg.enabled);
+      def("idb", _parent->route_cfg.id_bytes);
+      def("full", _parent->route_cfg.full_period_s);
+      def("life", _parent->route_cfg.life_s);
+      def("refr", _parent->route_cfg.refresh_pct);
+      def("gap", _parent->route_cfg.min_gap_s);
+      def("rep", _parent->route_cfg.repeats);
+      def("boots", _parent->route_cfg.boots);
+    }
+  public:
+    RoutePrefs(NodePrefs* parent) : _parent(parent) { }
+  };
+  RoutePrefs route;
+
   DynamicConfigSerializer custom;
 
 protected:
@@ -221,11 +258,13 @@ protected:
     def("repeat", repeat);
     def("room", room);
     def("power", power);
+    def("feat", feat);
+    def("route", route);
     def("custom", custom);
   }
 
 public:
-  NodePrefs() : ConfigSerializer(), bridge(this), gps(this), radio(this), power(this), repeat(this), room(this), custom(&radio) {
+  NodePrefs() : ConfigSerializer(), bridge(this), gps(this), radio(this), power(this), repeat(this), room(this), feat(this), route(this), custom(&radio) {
     node_name[0] = 0;
     password[0] = 0;
     guest_password[0] = 0;
@@ -261,6 +300,15 @@ public:
   // a one-line summary of the optional features compiled into this firmware and what they have done so far
   virtual void formatFeaturesReply(char *reply) {
     strcpy(reply, "ERR: not available");
+  }
+  // a feature setting changed (hop retries, route cache, ping, route.*): apply it now
+  virtual void onFeatureConfigChanged() { }
+  // `route [stats | <offset>]`: the route table, 8 lines at a time; `attached [<offset>]`: the checked-in clients
+  virtual void formatRouteReply(const char* args, char *reply) {
+    strcpy(reply, "ERR: routing not available");
+  }
+  virtual void formatAttachedReply(const char* args, char *reply) {
+    strcpy(reply, "ERR: routing not available");
   }
   // args: text after "routes" (may be empty); reply must hold at least 160 bytes
   virtual void formatRoutesReply(const char* args, char *reply) {

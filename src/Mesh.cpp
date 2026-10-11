@@ -9,12 +9,9 @@ void Mesh::begin() {
 
 void Mesh::loop() {
   Dispatcher::loop();
-#if MESH_HOP_RETRIES
-  serviceHopRetries();
-#endif
+  if (_hop_retries_max) serviceHopRetries();
 }
 
-#if MESH_HOP_RETRIES
 // How long to wait for the next repeater to pass a packet on: its turn to hear us, our packet's airtime, and
 // its turn to send.
 uint32_t Mesh::hopWaitMillis(int len_bytes) const {
@@ -42,7 +39,7 @@ void Mesh::serviceHopRetries() {
   int slot = _hop_retry.nextDue(now);
   if (slot < 0) return;
   const auto* e = _hop_retry.at(slot);
-  if (e->tries >= MESH_HOP_RETRIES) {   // asked enough times: give up on this hop
+  if (e->tries >= _hop_retries_max) {   // asked enough times: give up on this hop
     _hop_retry.release(slot);
     return;
   }
@@ -59,7 +56,6 @@ void Mesh::serviceHopRetries() {
   _hop_retry.retried(slot, now + jitter + hopWaitMillis(e->raw_len));
   n_hop_retries++;
 }
-#endif
 
 bool Mesh::allowPacketForward(const mesh::Packet* packet) { 
   return false;  // by default, Transport NOT enabled
@@ -89,14 +85,12 @@ int Mesh::searchChannelsByHash(const uint8_t* hash, GroupChannel channels[], int
 }
 
 DispatcherAction Mesh::onRecvPacket(Packet* pkt) {
-#if MESH_HOP_RETRIES
-  if (pkt->isRouteDirect() && _hop_retry.count() > 0) {
+  if (_hop_retries_max && pkt->isRouteDirect() && _hop_retry.count() > 0) {
     // is this the next repeater passing along a packet we sent on? Same hash, one hop shorter.
     uint8_t h[MAX_HASH_SIZE];
     pkt->calculatePacketHash(h);
     if (_hop_retry.overheard(h, pkt->getPathHashCount())) n_hop_acks++;
   }
-#endif
   if (pkt->isRouteDirect() && pkt->getPayloadType() == PAYLOAD_TYPE_TRACE) {
     if (pkt->path_len < MAX_PATH_SIZE) {
       uint8_t i = 0;
@@ -169,9 +163,7 @@ DispatcherAction Mesh::onRecvPacket(Packet* pkt) {
         removeSelfFromPath(pkt);
 
         uint32_t d = getDirectRetransmitDelay(pkt);
-#if MESH_HOP_RETRIES
-        trackHopForward(pkt, 0, d);
-#endif
+        if (_hop_retries_max) trackHopForward(pkt, 0, d);
         return ACTION_RETRANSMIT_DELAYED(0, d);  // Routed traffic is HIGHEST priority 
       }
     }
@@ -803,9 +795,7 @@ void Mesh::sendDirect(Packet* packet, const uint8_t* path, uint8_t path_len, uin
     }
   }
   _tables->markSeen(packet); // mark this packet as already sent in case it is rebroadcast back to us
-#if MESH_HOP_RETRIES
-  if (packet->getPayloadType() != PAYLOAD_TYPE_TRACE) trackHopForward(packet, pri, delay_millis);
-#endif
+  if (_hop_retries_max && packet->getPayloadType() != PAYLOAD_TYPE_TRACE) trackHopForward(packet, pri, delay_millis);
   sendPacket(packet, pri, delay_millis);
 }
 

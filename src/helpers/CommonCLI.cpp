@@ -36,6 +36,10 @@ void CommonCLI::loadPrefs(FILESYSTEM* fs) {
 #endif
     if (file) {
       _prefs->loadSerial(file);   // new Serial prefs
+      _prefs->hop_retries = constrain(_prefs->hop_retries, 0, 3);
+      _prefs->route_cache_en = constrain(_prefs->route_cache_en, 0, 1);
+      _prefs->ping_en = constrain(_prefs->ping_en, 0, 1);
+      mesh::routeSanitize(_prefs->route_cfg);
       file.close();
     }
   } else if (fs->exists("/com_prefs")) {
@@ -240,6 +244,10 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
       _callbacks->formatNeighborsReply(reply);
     } else if (strcmp(command, "features") == 0) {
       _callbacks->formatFeaturesReply(reply);
+    } else if (strcmp(command, "route") == 0 || memcmp(command, "route ", 6) == 0) {
+      _callbacks->formatRouteReply(command[5] == ' ' ? &command[6] : "", reply);
+    } else if (strcmp(command, "attached") == 0 || memcmp(command, "attached ", 9) == 0) {
+      _callbacks->formatAttachedReply(command[8] == ' ' ? &command[9] : "", reply);
     } else if (strcmp(command, "routes") == 0 || memcmp(command, "routes ", 7) == 0) {
       _callbacks->formatRoutesReply(command[6] == ' ' ? &command[7] : "", reply);
     } else if (memcmp(command, "neighbor.remove ", 16) == 0) {
@@ -588,6 +596,38 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
     *dp = 0;
     savePrefs();
     strcpy(reply, "OK");
+  } else if (memcmp(config, "route.", 6) == 0) {
+    char name[16];
+    const char* p = &config[6];
+    int n = 0;
+    while (*p && *p != ' ' && n < 15) name[n++] = *p++;
+    name[n] = 0;
+    if (*p == ' ') p++;
+    if (mesh::routeSet(_prefs->route_cfg, name, p, reply)) {
+      savePrefs();
+      _callbacks->onFeatureConfigChanged();
+    }
+  } else if (memcmp(config, "hop.retries ", 12) == 0) {
+    int n = _atoi(&config[12]);
+    if (n >= 0 && n <= 3 && (config[12] >= '0' && config[12] <= '9')) {
+      _prefs->hop_retries = (uint8_t)n;
+      savePrefs();
+      _callbacks->onFeatureConfigChanged();
+      strcpy(reply, "OK");
+    } else {
+      strcpy(reply, "Error, must be 0 (off) to 3");
+    }
+  } else if (memcmp(config, "routecache ", 11) == 0 || memcmp(config, "ping ", 5) == 0) {
+    bool is_cache = config[0] == 'r';
+    bool on;
+    if (mesh::routeParseOnOff(&config[is_cache ? 11 : 5], &on)) {
+      if (is_cache) _prefs->route_cache_en = on; else _prefs->ping_en = on;
+      savePrefs();
+      _callbacks->onFeatureConfigChanged();
+      strcpy(reply, "OK");
+    } else {
+      strcpy(reply, "Error, must be: on or off");
+    }
   } else if (memcmp(config, "loop.detect ", 12) == 0) {
     config += 12;
     uint8_t mode;
@@ -741,6 +781,14 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
       sp++;
     }
     *reply = 0;  // set null terminator
+  } else if (memcmp(config, "route", 5) == 0 && (config[5] == 0 || config[5] == '.') && strcmp(config, "routes") != 0) {
+    if (!mesh::routeGet(_prefs->route_cfg, config[5] == '.' ? &config[6] : "", reply)) strcpy(reply, "Error, unknown route setting");
+  } else if (memcmp(config, "hop.retries", 11) == 0) {
+    sprintf(reply, "> %d", _prefs->hop_retries);
+  } else if (memcmp(config, "routecache", 10) == 0) {
+    strcpy(reply, _prefs->route_cache_en ? "> on" : "> off");
+  } else if (strcmp(config, "ping") == 0) {
+    strcpy(reply, _prefs->ping_en ? "> on" : "> off");
   } else if (memcmp(config, "loop.detect", 11) == 0) {
     if (_prefs->loop_detect == LOOP_DETECT_OFF) {
       strcpy(reply, "> off");

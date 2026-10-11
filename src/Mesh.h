@@ -5,10 +5,10 @@
 #include <helpers/PingProtocol.h>
 
 // Hop-by-hop retransmission of unicast (DIRECT) packets: after sending a packet on to the next repeater, listen
-// for that repeater passing it along; if it is not heard, send it again, up to this many times. 0 disables the
-// feature entirely (nothing is compiled in).
+// for that repeater passing it along; if it is not heard, send it again, up to this many times. This is the number a
+// node starts with; it can be changed while running (setHopRetries), and 0 turns the feature off.
 #ifndef MESH_HOP_RETRIES
-  #define MESH_HOP_RETRIES  0
+  #define MESH_HOP_RETRIES  2
 #endif
 #ifndef MESH_HOP_PENDING
   #define MESH_HOP_PENDING  4    // packets waited on at once
@@ -41,13 +41,12 @@ class Mesh : public Dispatcher {
   RNG* _rng;
   MeshTables* _tables;
 
-#if MESH_HOP_RETRIES
   HopRetryTable<MESH_HOP_PENDING> _hop_retry;
   uint32_t n_hop_retries, n_hop_acks;
+  uint8_t _hop_retries_max;
   uint32_t hopWaitMillis(int len_bytes) const;
   void trackHopForward(const Packet* pkt, uint8_t priority, uint32_t delay_millis);
   void serviceHopRetries();
-#endif
 
   void removeSelfFromPath(Packet* packet);
   void routeDirectRecvAcks(Packet* packet, uint32_t delay_millis);
@@ -208,15 +207,17 @@ protected:
   Mesh(Radio& radio, MillisecondClock& ms, RNG& rng, RTCClock& rtc, PacketManager& mgr, MeshTables& tables)
     : Dispatcher(radio, ms, mgr), _rng(&rng), _rtc(&rtc), _tables(&tables)
   {
-#if MESH_HOP_RETRIES
     n_hop_retries = n_hop_acks = 0;
-#endif
+    _hop_retries_max = MESH_HOP_RETRIES;
   }
 
-#if MESH_HOP_RETRIES
   uint32_t getNumHopRetries() const { return n_hop_retries; }   // unicast packets sent again
   uint32_t getNumHopAcks() const { return n_hop_acks; }         // times the next hop was heard passing one on
-#endif
+  uint8_t getHopRetries() const { return _hop_retries_max; }
+  void setHopRetries(uint8_t n) {                               // 0 = off. Packets already waited on are dropped when it is turned off.
+    _hop_retries_max = n;
+    if (n == 0) _hop_retry.clear();
+  }
 
   MeshTables* getTables() const { return _tables; }
 

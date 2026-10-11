@@ -651,21 +651,20 @@ void MyMesh::onAdvertRecv(mesh::Packet *packet, const mesh::Identity &id, uint32
                           const uint8_t *app_data, size_t app_data_len) {
   mesh::Mesh::onAdvertRecv(packet, id, timestamp, app_data, app_data_len); // chain to super impl
 
-#if MAX_ROUTE_CACHE
   // adverts only get here after their signature has been verified, so the path to this node can be trusted
   // as the path the advert really took
-  {
+  if (_prefs.route_cache_en) {
     uint32_t now = getRTCClock()->getCurrentTime();
     route_cache.expire(now, ROUTE_CACHE_MAX_AGE_SECS);
     route_cache.learn(id.pub_key, packet->path, packet->path_len, now, (int8_t)(packet->getSNR() * 4));
   }
-#endif
 
   // if this a zero hop advert (and not via 'Share'), add it to neighbours
   if (packet->getPathHashCount() == 0 && !isShare(packet)) {
     AdvertDataParser parser(app_data, app_data_len);
     if (parser.isValid() && parser.getType() == ADV_TYPE_REPEATER) { // just keep neigbouring Repeaters
       putNeighbour(id, timestamp, packet->getSNR());
+      if (routing) routing->onHeardRepeater(mesh::routeIdFromKey(id.pub_key, routing->config().id_bytes), (int)(packet->getSNR() * 4), monoSeconds());
     }
   }
 }
@@ -797,11 +796,24 @@ bool MyMesh::onPeerPathRecv(mesh::Packet *packet, int sender_idx, const uint8_t 
 #define CTL_TYPE_NODE_DISCOVER_RESP  0x90
 
 void MyMesh::onPingRecv(mesh::Packet* packet, const mesh::PingRequest& req) {
-  if (isHiddenNode()) return;   // this node wishes to NOT be discoverable
+  if (isHiddenNode() || !_prefs.ping_en) return;   // this node wishes to NOT be discoverable, or pings are off
   answerPing(packet, req, ADV_TYPE_REPEATER, _prefs.node_name, 0, ping_limiter);
 }
 
 void MyMesh::onControlDataRecv(mesh::Packet* packet) {
+  if (routing && packet->payload_len >= 1) {   // client check-ins and route adverts from neighbouring repeaters
+    int snr4 = (int)(packet->getSNR() * 4);
+    if (mesh::isRouteAdv(packet->payload, packet->payload_len)) {
+      mesh::RouteAdv adv;
+      if (mesh::decodeRouteAdv(packet->payload, packet->payload_len, adv)) routing->onRouteAdv(adv, snr4, monoSeconds());
+      return;
+    }
+    if (mesh::isCheckin(packet->payload, packet->payload_len)) {
+      mesh::Checkin ck;
+      if (mesh::decodeCheckin(packet->payload, packet->payload_len, ck)) routing->onCheckin(ck, snr4, monoSeconds());
+      return;
+    }
+  }
   uint8_t type = packet->payload[0] & 0xF0;    // just test upper 4 bits
   if (type == CTL_TYPE_NODE_DISCOVER_REQ && packet->payload_len >= 6
       && !_prefs.disable_fwd && discover_limiter.allow(rtc_clock.getCurrentTime())
@@ -881,7 +893,8 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
       _cli(board, rtc, sensors, region_map, acl, &_prefs, this),
       telemetry(MAX_PACKET_PAYLOAD - 4),
       discover_limiter(4, 120),  // max 4 every 2 minutes
-      anon_limiter(4, 180)   // max 4 every 3 minutes
+      anon_limiter(4, 180),   // max 4 every 3 minutes
+      routing(NULL), mono_total_ms(0), mono_last_ms(0), next_routing_ms(0), next_expire_s(0)
 #if defined(WITH_RS232_BRIDGE)
       , bridge(&_prefs, WITH_RS232_BRIDGE, _mgr, &rtc)
 #endif
@@ -1009,6 +1022,9 @@ void MyMesh::begin(FILESYSTEM *fs) {
 #if ENV_INCLUDE_GPS == 1
   applyGpsPrefs();
 #endif
+
+  mono_last_ms = _ms->getMillis();
+  applyFeatureConfig();
 }
 
 void MyMesh::sendFloodScoped(const TransportKey& scope, mesh::Packet* pkt, uint32_t delay_millis, uint8_t path_hash_size) {
@@ -1106,22 +1122,157 @@ bool MyMesh::configSideDetectors(const uint8_t sideDetSFs[], uint8_t num, float 
 
 void MyMesh::formatFeaturesReply(char *reply) {
   char *dp = reply;
-#if MESH_HOP_RETRIES
-  dp += sprintf(dp, "hop-retry:%d (resent %lu, next hop heard %lu) ", MESH_HOP_RETRIES, (unsigned long)getNumHopRetries(),
-                (unsigned long)getNumHopAcks());
-#else
-  dp += sprintf(dp, "hop-retry:off ");
-#endif
-#if MAX_ROUTE_CACHE
-  dp += sprintf(dp, "route-cache:%d/%d ", route_cache.count(), MAX_ROUTE_CACHE);
-#else
-  dp += sprintf(dp, "route-cache:off ");
-#endif
-  strcpy(dp, "ping:on");
+  if (getHopRetries()) {
+    dp += sprintf(dp, "hop-retry:%d (resent %lu, next hop heard %lu) ", getHopRetries(), (unsigned long)getNumHopRetries(),
+                  (unsigned long)getNumHopAcks());
+  } else {
+    dp += sprintf(dp, "hop-retry:off ");
+  }
+  if (_prefs.route_cache_en) dp += sprintf(dp, "route-cache:%d/%d ", route_cache.count(), MAX_ROUTE_CACHE);
+  else dp += sprintf(dp, "route-cache:off ");
+  dp += sprintf(dp, "ping:%s ", _prefs.ping_en ? "on" : "off");
+  if (routing) {
+    uint32_t now = monoSeconds();
+    sprintf(dp, "route:on (neighbours %d, clients %d, routes %d)", routing->links.count(), routing->attached.count(now), routing->routes.count(now));
+  } else {
+    strcpy(dp, "route:off");
+  }
+}
+
+// ---- route tables ----
+
+uint32_t MyMesh::monoSeconds() {
+  uint32_t ms = _ms->getMillis();
+  mono_total_ms += (uint32_t)(ms - mono_last_ms);   // wrap-safe: the count carries on across millis() rolling over
+  mono_last_ms = ms;
+  return (uint32_t)(mono_total_ms / 1000);
+}
+
+void MyMesh::applyFeatureConfig() {
+  setHopRetries(_prefs.hop_retries);
+  const mesh::RouteConfigValues& v = _prefs.route_cfg;
+  bool same = routing && routing_applied.id_bytes == v.id_bytes && routing_applied.full_period_s == v.full_period_s &&
+              routing_applied.life_s == v.life_s && routing_applied.refresh_pct == v.refresh_pct &&
+              routing_applied.min_gap_s == v.min_gap_s && routing_applied.repeats == v.repeats;
+  if (routing && (!v.enabled || !same)) {   // turned off, or settings that need a fresh start
+    delete routing;
+    routing = NULL;
+  }
+  if (!routing && v.enabled) {
+    _prefs.route_cfg.boots++;   // each start outranks the one before: it is this repeater's own sequence number
+    if (_prefs.route_cfg.boots == 0) _prefs.route_cfg.boots = 1;
+    savePrefs();
+    routing_applied = _prefs.route_cfg;
+    mesh::RoutingConfig rc = mesh::toRoutingConfig(_prefs.route_cfg, _prefs.sf);
+    routing = new Router(mesh::routeIdFromKey(self_id.pub_key, rc.id_bytes), _prefs.route_cfg.boots, rc);
+    next_routing_ms = 0;
+    next_expire_s = 0;
+  }
+}
+
+void MyMesh::onFeatureConfigChanged() {
+  applyFeatureConfig();
+}
+
+void MyMesh::sendRouteAdv(const mesh::RouteAdv& adv) {
+  uint8_t buf[160];
+  int len = mesh::encodeRouteAdv(adv, buf, sizeof(buf));
+  if (len <= 0) return;
+  mesh::Packet* pkt = createControlData(buf, len);
+  if (pkt) sendZeroHop(pkt, getRNG()->nextInt(0, 1500));   // a little jitter, so neighbours that heard the same news do not answer together
+}
+
+void MyMesh::serviceRouting() {
+  uint32_t ms = _ms->getMillis();
+  if ((int32_t)(ms - next_routing_ms) < 0) return;   // look four times a second, not on every pass of the main loop
+  next_routing_ms = ms + 250;
+  uint32_t now = monoSeconds();
+  if ((int32_t)(now - next_expire_s) >= 0) {
+    routing->expire(now);
+    next_expire_s = now + 5;
+  }
+  mesh::RouteAdv adv;
+  for (int guard = 0; guard < 3 && _mgr->getFreeCount() >= 4 && routing->nextAdvert(now, adv); guard++) sendRouteAdv(adv);
+}
+
+static int hexId(char* out, mesh::RouteId id, int id_bytes) {
+  static const char digits[] = "0123456789ABCDEF";
+  for (int i = 0; i < id_bytes; i++) {
+    uint8_t b = (uint8_t)(id >> (24 - 8 * i));
+    out[2 * i] = digits[b >> 4];
+    out[2 * i + 1] = digits[b & 15];
+  }
+  out[2 * id_bytes] = 0;
+  return 2 * id_bytes;
+}
+
+void MyMesh::formatRouteReply(const char* args, char *reply) {
+  if (!routing) {
+    strcpy(reply, "route: off (set route.enable on)");
+    return;
+  }
+  uint32_t now = monoSeconds();
+  const mesh::RoutingStats& st = routing->stats;
+  if (strcmp(args, "stats") == 0) {
+    sprintf(reply, "adverts in %lu (entries %lu: new %lu, changed %lu, refreshed %lu, ignored %lu; unusable link %lu) out %lu (entries %lu) repeats cancelled %lu; check-ins %lu (ignored %lu)",
+            (unsigned long)st.adverts_in, (unsigned long)st.entries_in, (unsigned long)st.entries_new, (unsigned long)st.entries_changed,
+            (unsigned long)st.entries_refreshed, (unsigned long)st.entries_ignored, (unsigned long)st.adverts_from_unusable_links,
+            (unsigned long)st.adverts_out, (unsigned long)st.entries_out, (unsigned long)st.repeats_cancelled,
+            (unsigned long)st.checkins_in, (unsigned long)st.checkins_ignored);
+    return;
+  }
+  int offset = *args ? atoi(args) : 0;
+  int idb = routing->config().id_bytes;
+  char *dp = reply;
+  int shown = 0, seen = 0, total = routing->routes.count(now);
+  if (offset == 0) dp += sprintf(dp, "%d routes, %d clients, %d neighbours\n", total, routing->attached.count(now), routing->links.count());
+  for (int i = 0; i < routing->routes.capacity() && dp - reply < 104; i++) {
+    const mesh::RouteTableEntry* e = routing->routes.at(i);
+    if (!e || !mesh::timeAhead(e->expires, now)) continue;
+    if (seen++ < offset) continue;
+    char a[10], b[10];
+    hexId(a, e->dest, idb);
+    hexId(b, e->next, idb);
+    if (e->cost >= ROUTE_COST_UNREACHABLE) dp += sprintf(dp, "%s gone %lus\n", a, (unsigned long)(e->expires - now));
+    else dp += sprintf(dp, "%s>%s:%d:%lus\n", a, b, e->cost, (unsigned long)(e->expires - now));
+    shown++;
+  }
+  if (dp > reply && dp[-1] == '\n') dp--;
+  *dp = 0;
+  if (offset + shown < total) sprintf(dp, "\n...more: route %d", offset + shown);
+  else if (shown == 0 && offset == 0 && total == 0) strcpy(dp, total == 0 ? "\n(none)" : "");
+}
+
+void MyMesh::formatAttachedReply(const char* args, char *reply) {
+  if (!routing) {
+    strcpy(reply, "route: off (set route.enable on)");
+    return;
+  }
+  uint32_t now = monoSeconds();
+  int offset = *args ? atoi(args) : 0;
+  int idb = routing->config().id_bytes;
+  char *dp = reply;
+  int shown = 0, seen = 0, total = routing->attached.count(now);
+  for (int i = 0; i < routing->attached.capacity() && dp - reply < 110; i++) {
+    const mesh::AttachEntry* e = routing->attached.at(i);
+    if (!e || !mesh::timeAhead(e->expires, now)) continue;
+    if (seen++ < offset) continue;
+    char a[10];
+    hexId(a, e->id, idb);
+    dp += sprintf(dp, "%s:%lus:c%d:%.1fdB\n", a, (unsigned long)(e->expires - now), e->cost, e->snr4 / 4.0f);
+    shown++;
+  }
+  if (dp > reply && dp[-1] == '\n') dp--;
+  *dp = 0;
+  if (total == 0) strcpy(reply, "(none)");
+  else if (offset + shown < total) sprintf(dp, "\n...more: attached %d", offset + shown);
 }
 
 void MyMesh::formatRoutesReply(const char* args, char *reply) {
-#if MAX_ROUTE_CACHE
+  if (!_prefs.route_cache_en) {
+    strcpy(reply, "ERR: route cache is off (set routecache on)");
+    return;
+  }
   uint32_t now = getRTCClock()->getCurrentTime();
 
   if (strcmp(args, "clear") == 0) {
@@ -1171,9 +1322,6 @@ void MyMesh::formatRoutesReply(const char* args, char *reply) {
   }
   *dp = 0;
   if (n == 0) strcpy(reply, "(none)");
-#else
-  strcpy(reply, "ERR: route cache not enabled");
-#endif
 }
 
 void MyMesh::formatNeighborsReply(char *reply) {
@@ -1379,6 +1527,8 @@ void MyMesh::loop() {
 #endif
 
   mesh::Mesh::loop();
+
+  if (routing) serviceRouting();
 
   if (next_flood_advert && millisHasNowPassed(next_flood_advert)) {
     mesh::Packet *pkt = createSelfAdvert();
