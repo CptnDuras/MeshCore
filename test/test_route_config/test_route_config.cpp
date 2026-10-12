@@ -7,11 +7,13 @@ TEST(RouteConfig, DefaultsAreOffWithTheSpecifiedNumbers) {
     RouteConfigValues v;
     EXPECT_EQ(0, v.enabled);
     EXPECT_EQ(4, v.id_bytes);
-    EXPECT_EQ(3600, v.full_period_s);
+    EXPECT_EQ(14400, v.full_period_s);                      // 4 hours by default
     EXPECT_EQ(7200, v.life_s);
     EXPECT_EQ(67, v.refresh_pct);
     EXPECT_EQ(60, v.min_gap_s);
     EXPECT_EQ(2, v.repeats);
+    EXPECT_EQ(3, v.margin);
+    EXPECT_EQ(3, v.delta);
 }
 
 TEST(RouteConfig, SetsEachValueAndSaysOK) {
@@ -36,7 +38,7 @@ TEST(RouteConfig, TheFullPeriodHasAThirtyMinuteFloor) {
     EXPECT_NE(nullptr, strstr(r, "1800"));
     EXPECT_FALSE(routeSet(v, "full_period", "60", r));
     EXPECT_FALSE(routeSet(v, "full_period", "28801", r));
-    EXPECT_EQ(3600, v.full_period_s);                       // nothing changed
+    EXPECT_EQ(14400, v.full_period_s);                      // nothing changed
 }
 
 TEST(RouteConfig, RefusesOutOfRangeAndGarbage) {
@@ -75,9 +77,9 @@ TEST(RouteConfig, GetsEachValueAndAllOfThem) {
     RouteConfigValues v;
     char r[160];
     ASSERT_TRUE(routeGet(v, "enable", r)); EXPECT_STREQ("> off", r);
-    ASSERT_TRUE(routeGet(v, "full_period", r)); EXPECT_STREQ("> 3600", r);
+    ASSERT_TRUE(routeGet(v, "full_period", r)); EXPECT_STREQ("> 14400", r);
     ASSERT_TRUE(routeGet(v, "", r));
-    EXPECT_STREQ("> off id_bytes=4 full_period=3600 life=7200 refresh=67 min_gap=60 repeats=2", r);
+    EXPECT_STREQ("> off id_bytes=4 full_period=14400 life=7200 refresh=67 min_gap=60 repeats=2 margin=3 delta=3", r);
     EXPECT_FALSE(routeGet(v, "nonsense", r));
 }
 
@@ -112,6 +114,39 @@ TEST(RouteConfig, BecomesTheRoutingCoreConfiguration) {
     EXPECT_EQ(50, c.refresh_pct);
     EXPECT_EQ(90, c.min_gap_s);
     EXPECT_EQ(1, c.repeats);
+}
+
+TEST(RouteConfig, TheFullPeriodCanStillBeSetDownToThirtyMinutes) {
+    RouteConfigValues v;
+    char r[80];
+    ASSERT_TRUE(routeSet(v, "full_period", "1800", r));
+    EXPECT_EQ(1800, v.full_period_s);
+    EXPECT_EQ(1800, toRoutingConfig(v, 7).full_period_s);   // and it reaches the routing core
+}
+
+TEST(RouteConfig, MarginAndDeltaAreSettableAndReachTheRoutingCore) {
+    RouteConfigValues v;
+    char r[80];
+    ASSERT_TRUE(routeSet(v, "margin", "5", r)); EXPECT_EQ(5, v.margin);
+    ASSERT_TRUE(routeSet(v, "delta", "0", r)); EXPECT_EQ(0, v.delta);
+    ASSERT_TRUE(routeSet(v, "margin", "0", r)); EXPECT_EQ(0, v.margin);     // 0 = the plain rules
+    EXPECT_FALSE(routeSet(v, "margin", "21", r));
+    EXPECT_FALSE(routeSet(v, "delta", "-1", r));
+    EXPECT_FALSE(routeSet(v, "delta", "two", r));
+    ASSERT_TRUE(routeGet(v, "margin", r)); EXPECT_STREQ("> 0", r);
+    ASSERT_TRUE(routeSet(v, "margin", "4", r));
+    ASSERT_TRUE(routeSet(v, "delta", "6", r));
+    RoutingConfig c = toRoutingConfig(v, 7);
+    EXPECT_EQ(4, c.margin);
+    EXPECT_EQ(6, c.delta);
+}
+
+TEST(RouteConfig, SanitizeFixesOutOfRangeHysteresis) {
+    RouteConfigValues v;
+    v.margin = 99; v.delta = 200;
+    routeSanitize(v);
+    EXPECT_EQ(3, v.margin);
+    EXPECT_EQ(3, v.delta);
 }
 
 int main(int argc, char** argv) {

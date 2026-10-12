@@ -131,8 +131,15 @@ TEST(RoutingCore, ACheckedInClientIsLocalHereAndRoutedToElsewhere) {
     EXPECT_EQ(3, l.cost);
 }
 
+static RoutingConfig plainRules() {
+    RoutingConfig c;
+    c.margin = 0;     // a newer sequence number always wins: a client that moves is followed at once
+    c.delta = 0;
+    return c;
+}
+
 TEST(RoutingCore, AClientThatMovesIsPickedUpByTheNewRepeaterAndDroppedByTheOldOne) {
-    Chain n;
+    Chain n(plainRules());
     n.net.run(1000, 1100);
     n.c.onCheckin(checkin(C, 2), 40, 1100);
     n.net.run(1100, 1200);
@@ -434,6 +441,78 @@ TEST(RoutingCore, TheIdLengthIsAConfigurationOfTheWholeNetwork) {
     n.run(1000, 1100);
     EXPECT_EQ(ROUTE_VIA, a.lookup(0x50607080, 1100).where);   // lookups accept a longer id and cut it
     EXPECT_EQ(ROUTE_VIA, a.lookup(0x5060FFFF, 1100).where);   // ... which also means two nodes sharing 2 bytes are the same node
+}
+
+// ---- hysteresis ----
+
+// two ways between X and Y: through P and through Q, equally good. X advertises; Y hears it from both, in either order.
+struct Diamond {
+    Core x, y, p, q;
+    Net net;
+    int ix, iy, ip, iq;
+    explicit Diamond(RoutingConfig cfg) : x(R0, 100, cfg), y(R3, 100, cfg), p(R1, 100, cfg), q(R2, 100, cfg) {
+        ix = net.add(&x); iy = net.add(&y); ip = net.add(&p); iq = net.add(&q);
+        net.link(ix, ip); net.link(ix, iq); net.link(ip, iy); net.link(iq, iy);
+    }
+};
+
+TEST(RoutingCoreHysteresis, TheRouteStaysPutAndConvergesAcrossManyPeriodsOfEquallyGoodNeighbours) {
+    RoutingConfig cfg;               // the defaults: margin 3
+    cfg.full_period_s = 1800;
+    Diamond d(cfg);
+    d.net.run(1000, 1300);
+    RouteLookup first = d.y.lookup(R0, 1300);
+    ASSERT_EQ(ROUTE_VIA, first.where);
+    RouteId next = first.next;
+    // many periods go by: the sequence number keeps growing, arriving through P or Q depending on timing
+    for (uint32_t t = 1300; t < 1300 + 24 * 1800; t += 1800) {
+        d.net.run(t, t + 1800);
+        EXPECT_EQ(next, d.y.lookup(R0, t + 1800).next) << "the next hop flipped at " << t;
+    }
+}
+
+TEST(RoutingCoreHysteresis, AClearlyBetterRouteIsTakenAtOnce) {
+    RouteTable<4> t;
+    const RouteId A = 0x01000000, B = 0x02000000, C = 0x03000000;
+    ASSERT_EQ(ROUTE_NEW, t.accept(A, B, 1, 9, 10, 600, false, 0, 3, 3));        // cost 10 via B
+    EXPECT_EQ(ROUTE_IGNORED_WORSE, t.accept(A, C, 1, 8, 11, 600, false, 5, 3, 3));   // 9 via C: only 1 better, newer sequence number
+    EXPECT_EQ(B, t.find(A, 5)->next);
+    EXPECT_EQ(ROUTE_CHANGED, t.accept(A, C, 1, 5, 11, 600, false, 6, 3, 3));    // 6 via C: 4 better
+    EXPECT_EQ(C, t.find(A, 6)->next);
+}
+
+TEST(RoutingCoreHysteresis, TheCurrentNextHopIsAlwaysBelievedEvenWhenItGetsWorse) {
+    RouteTable<4> t;
+    const RouteId A = 0x01000000, B = 0x02000000;
+    t.accept(A, B, 1, 2, 10, 600, false, 0, 3, 3);
+    EXPECT_EQ(ROUTE_CHANGED, t.accept(A, B, 1, 9, 11, 600, false, 5, 3, 3));    // 10 now, was 3
+    EXPECT_EQ(10, t.find(A, 5)->cost);
+    EXPECT_EQ(ROUTE_WITHDRAWN, t.accept(A, B, 1, ROUTE_COST_UNREACHABLE, 12, 600, false, 6, 3, 3));
+}
+
+TEST(RoutingCoreHysteresis, ACostChangeSmallerThanTheThresholdIsBelievedButNotAnnounced) {
+    RouteTable<4> t;
+    const RouteId A = 0x01000000, B = 0x02000000;
+    t.accept(A, B, 1, 4, 10, 600, false, 0, 3, 3);                               // cost 5
+    EXPECT_EQ(ROUTE_ADJUSTED, t.accept(A, B, 1, 5, 11, 600, false, 5, 3, 3));    // 6: moved by 1
+    EXPECT_EQ(6, t.find(A, 5)->cost);                                            // and the table has it
+    EXPECT_EQ(ROUTE_CHANGED, t.accept(A, B, 1, 9, 12, 600, false, 6, 3, 3));     // 10: moved by 4
+    EXPECT_EQ(ROUTE_REFRESHED, t.accept(A, B, 1, 9, 13, 600, false, 7, 3, 3));   // same cost, newer: just a refresh
+}
+
+TEST(RoutingCoreHysteresis, ADifferentNextHopIsAlwaysAnnouncedWhenItIsTaken) {
+    RouteTable<4> t;
+    const RouteId A = 0x01000000, B = 0x02000000, C = 0x03000000;
+    t.accept(A, B, 1, 9, 10, 600, false, 0, 3, 3);
+    EXPECT_EQ(ROUTE_IGNORED_WORSE, t.accept(A, C, 1, 7, 11, 600, false, 5, 3, 3));   // 8 vs 10 is not enough: margin 3
+    EXPECT_EQ(ROUTE_CHANGED, t.accept(A, C, 1, 5, 11, 600, false, 6, 3, 3));     // 6 vs 10: clearly better, announced
+}
+
+TEST(RoutingCoreHysteresis, WithMarginZeroTheOldRulesApplyUnchanged) {
+    RouteTable<4> t;
+    const RouteId A = 0x01000000, B = 0x02000000, C = 0x03000000;
+    t.accept(A, B, 1, 2, 10, 600, false, 0);
+    EXPECT_EQ(ROUTE_CHANGED, t.accept(A, C, 1, 8, 11, 600, false, 5));           // newer sequence number wins, however much worse
 }
 
 int main(int argc, char** argv) {

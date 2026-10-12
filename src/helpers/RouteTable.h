@@ -14,6 +14,13 @@ namespace mesh {
  *     or it comes from the current next hop with a sequence number that is not older (so a worse cost from the next hop is believed);
  *   - cost 255 means unreachable (a withdrawal). A withdrawn entry stays until its lifetime ends so an older advert cannot bring the
  *     route back.
+ *
+ * Hysteresis (margin > 0). With the rules above, a newer sequence number from ANY neighbour replaces the route, however much worse it is.
+ * Adverts reach a repeater one hop per advert period, so which neighbour's copy is newest is a matter of timing, not of the route's
+ * quality, and in a mesh with parallel paths the next hop flips back and forth, each flip announced to the neighbours. So with a margin
+ * the current next hop is kept unless it has stopped refreshing (its entry lapses) or another neighbour is cheaper by at least `margin`;
+ * the current next hop's own refreshes and cost changes are always believed. A cost change of less than `delta` from the current next
+ * hop is believed but not announced (the next full table carries it). margin 0 gives the plain rules above.
  * Fixed size, no heap, no clock of its own (callers pass in the time).
  */
 struct RouteTableEntry {
@@ -32,6 +39,7 @@ enum RouteAccept : uint8_t {
   ROUTE_NEW,            // a destination we did not know
   ROUTE_CHANGED,        // next hop or cost changed: neighbours should hear about it
   ROUTE_REFRESHED,      // same route, believed for longer
+  ROUTE_ADJUSTED,       // same next hop, cost moved by less than the announce threshold: believed, not announced
   ROUTE_WITHDRAWN,      // now known to be unreachable
   ROUTE_IGNORED_OLD,    // an older sequence number than we hold
   ROUTE_IGNORED_WORSE,  // not older, but not better
@@ -76,6 +84,23 @@ public:
 
   const RouteTableEntry* at(int i) const { return (i >= 0 && i < CAPACITY && entries[i].used) ? &entries[i] : NULL; }
 
+  /**
+   * \brief  The usable entry whose id starts with these bytes, for packets that name a repeater by the same short hash the path uses
+   *         (1 to 3 bytes). Several repeaters can share a short hash; the cheapest route wins, and a wrong guess only costs the
+   *         message one failed attempt, after which the sender falls back to flooding.
+   */
+  const RouteTableEntry* findByPrefix(const uint8_t* prefix, int len, uint32_t now) const {
+    const RouteTableEntry* best = NULL;
+    for (int i = 0; i < CAPACITY; i++) {
+      const RouteTableEntry& e = entries[i];
+      if (!live(e, now) || e.cost >= ROUTE_COST_UNREACHABLE) continue;
+      bool match = true;
+      for (int k = 0; k < len && match; k++) match = (uint8_t)(e.dest >> (24 - 8 * k)) == prefix[k];
+      if (match && (best == NULL || e.cost < best->cost)) best = &e;
+    }
+    return best;
+  }
+
   // the entry for dest if it is usable: not expired and not withdrawn
   const RouteTableEntry* find(RouteId dest, uint32_t now) const {
     for (int i = 0; i < CAPACITY; i++) {
@@ -92,7 +117,7 @@ public:
    * \param  life_s     how long to believe it without hearing it again
    */
   RouteAccept accept(RouteId dest, RouteId from, uint8_t link_cost, uint8_t adv_cost, uint16_t seq, uint32_t life_s,
-                     bool client, uint32_t now) {
+                     bool client, uint32_t now, uint8_t margin = 0, uint8_t delta = 0) {
     uint8_t total = adv_cost >= ROUTE_COST_UNREACHABLE ? (uint8_t)ROUTE_COST_UNREACHABLE : addCost(adv_cost, link_cost);
     RouteTableEntry* e = slot(dest);
     bool known = e != NULL && live(*e, now);
@@ -109,12 +134,25 @@ public:
       return ROUTE_NEW;
     }
     bool newer = seqNewer(seq, e->seq), same = seq == e->seq;
-    bool accept = newer || (same && total < e->cost) || (e->next == from && !seqNewer(e->seq, seq));
+    bool accept;
+    if (margin == 0) {
+      accept = newer || (same && total < e->cost) || (e->next == from && !seqNewer(e->seq, seq));
+    } else {
+      // keep the current next hop unless the newcomer is clearly cheaper; its own news (and a withdrawal from it) always counts
+      accept = (e->next == from && !seqNewer(e->seq, seq)) ||
+               (!seqNewer(e->seq, seq) && total != ROUTE_COST_UNREACHABLE && (int)total + margin <= (int)e->cost);
+    }
     if (!accept) return seqNewer(e->seq, seq) ? ROUTE_IGNORED_OLD : ROUTE_IGNORED_WORSE;
+    RouteId old_next = e->next;
+    uint8_t old_cost = e->cost;
     bool moved = e->next != from || e->cost != total;
     e->next = from; e->cost = total; e->seq = seq; e->client = client;
     e->expires = now + life_s;
     if (total == ROUTE_COST_UNREACHABLE) return ROUTE_WITHDRAWN;
+    if (moved && delta > 1 && old_next == from && old_cost != ROUTE_COST_UNREACHABLE) {
+      int diff = (int)total - (int)old_cost;
+      if ((diff < 0 ? -diff : diff) < delta) return ROUTE_ADJUSTED;
+    }
     return moved ? ROUTE_CHANGED : ROUTE_REFRESHED;
   }
 

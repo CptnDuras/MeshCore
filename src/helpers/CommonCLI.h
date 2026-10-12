@@ -233,6 +233,8 @@ private:
       def("refr", _parent->route_cfg.refresh_pct);
       def("gap", _parent->route_cfg.min_gap_s);
       def("rep", _parent->route_cfg.repeats);
+      def("rmar", _parent->route_cfg.margin);
+      def("rdel", _parent->route_cfg.delta);
       def("boots", _parent->route_cfg.boots);
     }
   public:

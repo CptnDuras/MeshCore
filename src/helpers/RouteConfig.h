@@ -13,11 +13,14 @@ namespace mesh {
  *
  *   route.enable      on | off              (default off: nothing is created, nothing is sent)
  *   route.id_bytes    2 | 3 | 4             (default 4; the whole network must agree)
- *   route.full_period 0 | 1800 .. 28800     seconds between whole-table adverts; 0 = lifetimes instead (default 3600)
+ *   route.full_period 0 | 1800 .. 28800     seconds between whole-table adverts; 0 = lifetimes instead (default 14400, 4 hours; 1800 = 30 min)
  *   route.life        600 .. 32640          lifetimes mode: how long this repeater's own entry is believed (default 7200)
  *   route.refresh     10 .. 95              lifetimes mode: refresh when this percent of a lifetime is left (default 67)
  *   route.min_gap     10 .. 600             at most one advert per this many seconds (default 60)
  *   route.repeats     1 .. 3                times a change is sent unless a neighbour is heard passing it on (default 2)
+ *   route.margin      0 .. 20               keep the current next hop unless another neighbour is cheaper by this much (default 3; 0 = a newer
+ *                                           sequence number always wins, which makes next hops flip and adverts multiply)
+ *   route.delta       0 .. 20               do not announce a cost change smaller than this (default 3; 0 or 1 = announce every change)
  */
 #define ROUTE_CFG_FULL_PERIOD_MIN   1800
 #define ROUTE_CFG_FULL_PERIOD_MAX   28800
@@ -30,11 +33,13 @@ struct RouteConfigValues {
   uint8_t  refresh_pct;
   uint16_t min_gap_s;
   uint8_t  repeats;
+  uint8_t  margin;
+  uint8_t  delta;
   uint16_t boots;          // counts restarts; this repeater's own sequence number, so each start outranks the one before
 
   RouteConfigValues()
-      : enabled(0), id_bytes(ROUTE_ID_BYTES_DEFAULT), full_period_s(3600), life_s(7200), refresh_pct(67), min_gap_s(60), repeats(2),
-        boots(0) {}
+      : enabled(0), id_bytes(ROUTE_ID_BYTES_DEFAULT), full_period_s(ROUTING_DEFAULT_FULL_PERIOD_S), life_s(7200), refresh_pct(67), min_gap_s(60),
+        repeats(2), margin(ROUTING_DEFAULT_MARGIN), delta(ROUTING_DEFAULT_DELTA), boots(0) {}
 };
 
 // bring values read from a saved file (or anywhere) back inside their ranges
@@ -51,6 +56,8 @@ static inline void routeSanitize(RouteConfigValues& v) {
   if (v.min_gap_s < 10) v.min_gap_s = 10;
   if (v.min_gap_s > 600) v.min_gap_s = 600;
   if (v.repeats < 1 || v.repeats > 3) v.repeats = 2;
+  if (v.margin > 20) v.margin = ROUTING_DEFAULT_MARGIN;
+  if (v.delta > 20) v.delta = ROUTING_DEFAULT_DELTA;
 }
 
 static inline RoutingConfig toRoutingConfig(const RouteConfigValues& v, int sf) {
@@ -62,6 +69,8 @@ static inline RoutingConfig toRoutingConfig(const RouteConfigValues& v, int sf) 
   c.refresh_pct = v.refresh_pct;
   c.min_gap_s = v.min_gap_s;
   c.repeats = v.repeats;
+  c.margin = v.margin;
+  c.delta = v.delta;
   return c;
 }
 
@@ -116,6 +125,12 @@ static inline bool routeSet(RouteConfigValues& v, const char* name, const char* 
   } else if (strcmp(name, "repeats") == 0) {
     if (!routeParseInt(value, &n) || n < 1 || n > 3) { strcpy(reply, "Error, must be 1-3"); return false; }
     v.repeats = (uint8_t)n;
+  } else if (strcmp(name, "margin") == 0) {
+    if (!routeParseInt(value, &n) || n < 0 || n > 20) { strcpy(reply, "Error, must be 0-20"); return false; }
+    v.margin = (uint8_t)n;
+  } else if (strcmp(name, "delta") == 0) {
+    if (!routeParseInt(value, &n) || n < 0 || n > 20) { strcpy(reply, "Error, must be 0-20"); return false; }
+    v.delta = (uint8_t)n;
   } else {
     strcpy(reply, "Error, unknown route setting");
     return false;
@@ -133,9 +148,11 @@ static inline bool routeGet(const RouteConfigValues& v, const char* name, char* 
   else if (strcmp(name, "refresh") == 0) sprintf(reply, "> %d", v.refresh_pct);
   else if (strcmp(name, "min_gap") == 0) sprintf(reply, "> %d", v.min_gap_s);
   else if (strcmp(name, "repeats") == 0) sprintf(reply, "> %d", v.repeats);
+  else if (strcmp(name, "margin") == 0) sprintf(reply, "> %d", v.margin);
+  else if (strcmp(name, "delta") == 0) sprintf(reply, "> %d", v.delta);
   else if (*name == 0)
-    sprintf(reply, "> %s id_bytes=%d full_period=%d life=%d refresh=%d min_gap=%d repeats=%d", v.enabled ? "on" : "off", v.id_bytes,
-            v.full_period_s, v.life_s, v.refresh_pct, v.min_gap_s, v.repeats);
+    sprintf(reply, "> %s id_bytes=%d full_period=%d life=%d refresh=%d min_gap=%d repeats=%d margin=%d delta=%d", v.enabled ? "on" : "off",
+            v.id_bytes, v.full_period_s, v.life_s, v.refresh_pct, v.min_gap_s, v.repeats, v.margin, v.delta);
   else return false;
   return true;
 }
