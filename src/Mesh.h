@@ -3,6 +3,8 @@
 #include <Dispatcher.h>
 #include <helpers/HopRetryTable.h>
 #include <helpers/PingProtocol.h>
+#include <helpers/RoutedPacket.h>
+#include <helpers/RoutedHints.h>
 
 // Hop-by-hop retransmission of unicast (DIRECT) packets: after sending a packet on to the next repeater, listen
 // for that repeater passing it along; if it is not heard, send it again, up to this many times. This is the number a
@@ -47,6 +49,14 @@ class Mesh : public Dispatcher {
   uint32_t hopWaitMillis(int len_bytes) const;
   void trackHopForward(const Packet* pkt, uint8_t priority, uint32_t delay_millis);
   void serviceHopRetries();
+
+  // routed forwarding (see helpers/RoutedPacket.h)
+  EntryTracker _entry;           // our nearest repeater: the last hop of the floods we hear
+  RoutingSeen _routing_seen;     // repeaters heard sending route adverts: the ones that understand ROUTED
+  uint32_t n_routed_fwd, n_routed_delivered, n_routed_dropped, n_routed_sent;
+  DispatcherAction onRoutedPacket(Packet* pkt);
+  void trackRoutedForward(const Packet* pkt, uint32_t delay_millis);
+  uint32_t nowSeconds() const { return _ms->getMillis() / 1000; }
 
   void removeSelfFromPath(Packet* packet);
   void routeDirectRecvAcks(Packet* packet, uint32_t delay_millis);
@@ -204,10 +214,18 @@ protected:
   */
   virtual void onAckRecv(Packet* packet, uint32_t ack_crc) { }
 
+  /**
+   * \brief  What to do with a ROUTED envelope that names this node as the next hop. Repeaters with route tables fill in the decision;
+   *         everything else leaves it at the default, which drops the envelope.
+   * \returns true if `d` was filled in
+   */
+  virtual bool routedDecision(const RoutedEnvelope& e, RoutedDecision& d) { return false; }
+
   Mesh(Radio& radio, MillisecondClock& ms, RNG& rng, RTCClock& rtc, PacketManager& mgr, MeshTables& tables)
     : Dispatcher(radio, ms, mgr), _rng(&rng), _rtc(&rtc), _tables(&tables)
   {
     n_hop_retries = n_hop_acks = 0;
+    n_routed_fwd = n_routed_delivered = n_routed_dropped = n_routed_sent = 0;
     _hop_retries_max = MESH_HOP_RETRIES;
   }
 
@@ -220,6 +238,25 @@ protected:
   }
 
   MeshTables* getTables() const { return _tables; }
+
+  uint32_t getNumRoutedForwarded() const { return n_routed_fwd; }       // envelopes this repeater passed to the next hop
+  uint32_t getNumRoutedDelivered() const { return n_routed_delivered; } // envelopes unwrapped here and sent on to the destination
+  uint32_t getNumRoutedDropped() const { return n_routed_dropped; }     // envelopes dropped: no route, or no life left
+  uint32_t getNumRoutedSent() const { return n_routed_sent; }           // envelopes this node originated
+
+  /**
+   * \brief  Can this node send ROUTED envelopes right now? It needs to know its nearest repeater, and to have heard that repeater
+   *         (or one sharing its short hash) send route adverts, which proves it understands them.
+   * \param  hash  out: the nearest repeater's hash, hsize bytes
+   */
+  bool canSendRouted(uint8_t* hash, uint8_t& hsize);
+
+  /**
+   * \brief  Send `inner` (a packet composed as if for sendDirect with an empty path) to the destination's home repeater, from the
+   *         nearest repeater, by the route tables.
+   * \returns true if it was sent (the inner packet is then spent); false if it was not possible, and `inner` is untouched
+   */
+  bool sendRouted(Packet* inner, const uint8_t* dest_home, uint8_t dest_hsize, uint32_t delay_millis = 0);
 
 public:
   void begin();

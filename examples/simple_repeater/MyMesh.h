@@ -164,6 +164,7 @@ protected:
   int calcRxDelay(float score, uint32_t air_time) const override;
 
   uint32_t getRetransmitDelay(const mesh::Packet* packet) override;
+  bool routedDecision(const mesh::RoutedEnvelope& e, mesh::RoutedDecision& d) override;
   uint32_t getDirectRetransmitDelay(const mesh::Packet* packet) override;
 
   int getInterferenceThreshold() const override {

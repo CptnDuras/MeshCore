@@ -1,4 +1,5 @@
 #include "MyMesh.h"
+#include <stdarg.h>
 #include <algorithm>
 
 /* ------------------------------ Config -------------------------------- */
@@ -542,6 +543,14 @@ void MyMesh::logTxFail(mesh::Packet *pkt, int len) {
 int MyMesh::calcRxDelay(float score, uint32_t air_time) const {
   if (_prefs.rx_delay_base <= 0.0f) return 0;
   return (int)((pow(_prefs.rx_delay_base, 0.85f - score) - 1.0) * air_time);
+}
+
+// An envelope for a destination repeater arrives here when this repeater is named as its next hop. With route tables on and forwarding
+// allowed, decide from the table; otherwise drop it (the sender will flood).
+bool MyMesh::routedDecision(const mesh::RoutedEnvelope& e, mesh::RoutedDecision& d) {
+  if (routing == NULL || _prefs.disable_fwd) return false;
+  d = mesh::routedDecide(*routing, self_id.pub_key, e, monoSeconds(), routing->config().id_bytes);
+  return true;
 }
 
 uint32_t MyMesh::getRetransmitDelay(const mesh::Packet *packet) {
@@ -1120,22 +1129,34 @@ bool MyMesh::configSideDetectors(const uint8_t sideDetSFs[], uint8_t num, float 
 }
 #endif
 
+// Appends to the reply without ever running past the 160 bytes the command reply buffer has.
+static void addTo(char* reply, size_t cap, const char* fmt, ...) {
+  size_t used = strlen(reply);
+  if (used >= cap - 1) return;
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(reply + used, cap - used, fmt, ap);
+  va_end(ap);
+}
+
 void MyMesh::formatFeaturesReply(char *reply) {
-  char *dp = reply;
+  const size_t cap = 160;
+  reply[0] = 0;
   if (getHopRetries()) {
-    dp += sprintf(dp, "hop-retry:%d (resent %lu, next hop heard %lu) ", getHopRetries(), (unsigned long)getNumHopRetries(),
-                  (unsigned long)getNumHopAcks());
+    addTo(reply, cap, "hop-retry:%d (resent %lu, heard %lu) ", getHopRetries(), (unsigned long)getNumHopRetries(), (unsigned long)getNumHopAcks());
   } else {
-    dp += sprintf(dp, "hop-retry:off ");
+    addTo(reply, cap, "hop-retry:off ");
   }
-  if (_prefs.route_cache_en) dp += sprintf(dp, "route-cache:%d/%d ", route_cache.count(), MAX_ROUTE_CACHE);
-  else dp += sprintf(dp, "route-cache:off ");
-  dp += sprintf(dp, "ping:%s ", _prefs.ping_en ? "on" : "off");
+  if (_prefs.route_cache_en) addTo(reply, cap, "route-cache:%d/%d ", route_cache.count(), MAX_ROUTE_CACHE);
+  else addTo(reply, cap, "route-cache:off ");
+  addTo(reply, cap, "ping:%s ", _prefs.ping_en ? "on" : "off");
   if (routing) {
     uint32_t now = monoSeconds();
-    sprintf(dp, "route:on (neighbours %d, clients %d, routes %d)", routing->links.count(), routing->attached.count(now), routing->routes.count(now));
+    addTo(reply, cap, "route:on (nbrs %d, clients %d, routes %d) routed:fwd %lu dlv %lu drop %lu", routing->links.count(), routing->attached.count(now),
+          routing->routes.count(now), (unsigned long)getNumRoutedForwarded(), (unsigned long)getNumRoutedDelivered(),
+          (unsigned long)getNumRoutedDropped());
   } else {
-    strcpy(dp, "route:off");
+    addTo(reply, cap, "route:off");
   }
 }
 
@@ -1158,6 +1179,7 @@ void MyMesh::applyFeatureConfig() {
     delete routing;
     routing = NULL;
   }
+  if (routing) routing->setHysteresis(v.margin, v.delta);   // takes effect at once; nothing to rebuild
   if (!routing && v.enabled) {
     _prefs.route_cfg.boots++;   // each start outranks the one before: it is this repeater's own sequence number
     if (_prefs.route_cfg.boots == 0) _prefs.route_cfg.boots = 1;

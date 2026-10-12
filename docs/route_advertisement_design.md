@@ -1,8 +1,16 @@
 # Route advertisement between repeaters (design draft)
 
-Status: DRAFT, local experiment. Implemented so far (all opt-in, off by default): per-hop retransmission
-(`HopRetryTable.h`, build flag `MESH_HOP_RETRIES`) and the observation-only route cache (`RouteCache.h`, `routes` CLI).
-The route tables and routed forwarding described below are NOT implemented. Numbers marked *(unverified)* are assumptions to be checked.
+Status: DRAFT, local experiment. Implemented (route tables opt-in, off by default): per-hop retransmission (`HopRetryTable.h`),
+the observation-only route cache (`RouteCache.h`), the route tables and adverts (`RoutingCore.h` and friends), routed forwarding with
+the `ROUTED` envelope (`RoutedPacket.h`, `Mesh::onRoutedPacket`; payload type 0x0C), and on the client side the cached path, then
+routed, then flood order (`BaseChatMesh::sendMessage`). Two refinements came from the simulator and are in the firmware: hysteresis in the
+route table (`route.margin`, `route.delta`) and a 4 hour default for the full-table period. Not implemented: routed acknowledgements
+from the destination use the cached path or flood as before; MAC on adverts; client check-ins from the companion. Numbers marked
+*(unverified)* are assumptions to be checked.
+
+Differences from the draft below: the envelope carries one hash size `h` (1 to 3 bytes) for both home repeaters, which repeaters resolve
+against their tables by prefix (the cheapest match wins; a wrong guess costs one attempt); the outer packet's path is the next hop's
+hash; the ttl is not part of the envelope's identity (so the sender can hear the next hop pass it on, and duplicates are caught).
 
 ## 1. Problem
 
