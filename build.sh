@@ -126,12 +126,6 @@ build_firmware() {
   # get env platform for post build actions
   ENV_PLATFORM=($(get_platform_for_env $1))
 
-  # get git commit sha
-  COMMIT_HASH=$(git rev-parse --short HEAD)
-
-  # set firmware build date
-  FIRMWARE_BUILD_DATE=$(date '+%d-%b-%Y')
-
   # get FIRMWARE_VERSION, which should be provided by the environment
   if [ -z "$FIRMWARE_VERSION" ]; then
     echo "FIRMWARE_VERSION must be set in environment"
@@ -262,6 +256,27 @@ build_firmwares() {
   build_room_server_firmwares
 }
 
+# The commit hash and build date are worked out ONCE per run, so every firmware built by one run carries exactly the
+# same version string, whatever the device, however long the run takes, and even if midnight passes during it.
+COMMIT_HASH=$(git rev-parse --short HEAD)
+FIRMWARE_BUILD_DATE=$(date '+%d-%b-%Y')
+if [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+  echo "warning: the working tree has uncommitted changes; the builds carry the hash of HEAD ($COMMIT_HASH) but not those changes" >&2
+fi
+
+# Check that every firmware in out/ was built from the same version string. Run after each build command.
+verify_build_hash() {
+  local bad=0 f
+  for f in out/*; do
+    [ -e "$f" ] || continue
+    case "$f" in
+      *-"${FIRMWARE_VERSION}-${COMMIT_HASH}".*|*-"${FIRMWARE_VERSION}-${COMMIT_HASH}"-merged.*) ;;
+      *) echo "build hash mismatch: $f (expected ${FIRMWARE_VERSION}-${COMMIT_HASH})" >&2; bad=1 ;;
+    esac
+  done
+  return $bad
+}
+
 # clean build dir
 rm -rf out
 mkdir -p out
@@ -301,4 +316,9 @@ elif [[ $1 == "get-repeater-firmwares-to-build" ]]; then
   get_pio_envs_ending_with_string "_repeater"
 elif [[ $1 == "get-room-server-firmwares-to-build" ]]; then
   get_pio_envs_ending_with_string "_room_server"
+fi
+
+# every firmware this run produced must carry the same version string and hash
+if [ -n "$FIRMWARE_VERSION" ]; then
+  verify_build_hash
 fi

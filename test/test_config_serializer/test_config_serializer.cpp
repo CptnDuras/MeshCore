@@ -130,6 +130,21 @@ TEST(ConfigSerializer, LoadSerial_Basic) {
     EXPECT_TRUE(match);
 }
 
+// A prefs file written by older firmware lacks the keys newer firmware added: those must keep their defaults
+// (this is what lets a repeater be updated without losing settings or gaining a reset one).
+TEST(ConfigSerializer, LoadSerial_MissingKeysKeepTheirValues) {
+    MockInputStream s("{age:" TEST_INT_S ",name:\"Scott\"}");
+    TestStruct data;
+    data.age = 0;
+    data.flags = 7;       // the default a newer key would carry
+
+    EXPECT_TRUE(data.loadSerial(s));
+
+    EXPECT_EQ(TEST_INT, data.age);
+    EXPECT_EQ(7, data.flags);
+    EXPECT_STREQ("Scott", data.name);
+}
+
 TEST(ConfigSerializer, LoadSerial_HandleWhitespace) {
     MockInputStream s("  { age:  " TEST_INT_S " ,  flags:  " TEST_INT_S " ,  name:  \"Scott\" }  ");
     TestStruct data;
