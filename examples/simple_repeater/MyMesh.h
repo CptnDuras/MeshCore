@@ -24,6 +24,13 @@
 #define WITH_BRIDGE
 #endif
 
+#ifdef WITH_MQTT_BRIDGE
+// Observer module: MQTT uplink + browser config. All glue lives in MyMeshObserver.cpp.
+#include "helpers/bridges/MQTTBridge.h"
+#define WITH_BRIDGE
+#include "helpers/esp32/WebConfigServer.h"   // defines WITH_WEBCONFIG on ESP32
+#endif
+
 #include <helpers/AdvertDataHelpers.h>
 #include <helpers/ArduinoHelpers.h>
 #include <helpers/ClientACL.h>
@@ -38,7 +45,7 @@
 #include <helpers/RoutingPolicy.h>
 #include "RateLimiter.h"
 
-#ifdef WITH_BRIDGE
+#if defined(WITH_BRIDGE) && !defined(WITH_MQTT_BRIDGE)
 extern AbstractBridge* bridge;
 #endif
 
@@ -86,7 +93,11 @@ struct NeighbourInfo {
 
 #define PACKET_LOG_FILE  "/packet_log"
 
-class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
+class MyMesh : public mesh::Mesh, public CommonCLICallbacks
+#ifdef WITH_WEBCONFIG
+    , public WebConfigServer::Callbacks
+#endif
+{
   FILESYSTEM* _fs;
   uint32_t last_millis;
   uint64_t uptime_millis;
@@ -136,6 +147,14 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   RS232Bridge bridge;
 #elif defined(WITH_ESPNOW_BRIDGE)
   ESPNowBridge bridge;
+#elif defined(WITH_MQTT_BRIDGE)
+  MQTTBridge* bridge;   // heap-allocated in observerBegin(); NULL until the bridge is enabled
+#endif
+#ifdef WITH_WEBCONFIG
+  WebConfigServer* _webconfig = NULL;   // heap-allocated while running, freed on stop
+  bool _wc_batch_active = false;        // coalesce bridge restarts during a config batch
+  bool _wc_restart_pending = false;
+  uint8_t _wc_slot_restart_mask = 0;
 #endif
 
   void putNeighbour(const mesh::Identity& id, uint32_t timestamp, float snr);
@@ -258,7 +277,7 @@ public:
   void handleCommand(uint32_t sender_timestamp, char* command, char* reply);
   void loop();
 
-#if defined(WITH_BRIDGE)
+#if defined(WITH_BRIDGE) && !defined(WITH_MQTT_BRIDGE)
   void setBridgeState(bool enable) override {
     if (enable == bridge.isRunning()) return;
     if (enable)
@@ -276,6 +295,37 @@ public:
     bridge.end();
     bridge.begin();
   }
+#endif
+
+#if defined(WITH_MQTT_BRIDGE)
+  // ---- Observer module glue (definitions in MyMeshObserver.cpp) ----
+  void setBridgeState(bool enable) override;
+  void restartBridge() override;
+  void restartBridgeSlot(int slot) override;
+  int getQueueSize() override { return bridge ? bridge->getQueueSize() : 0; }
+  bool isMqttBridgeRunning() override { return bridge && bridge->isRunning(); }
+  bool syncMqttNtp() override;
+  bool runMqttNtpDiag(char* reply, size_t reply_size, bool verbose) override;
+  void observerConfigureBridge();   // push identity/version/stats sources into the bridge
+  void observerBegin();   // create/start the bridge, raise the first-boot setup portal
+  void observerLoop();    // tick the web config server (the bridge runs its own task)
+#endif
+
+#ifdef WITH_WEBCONFIG
+  // CommonCLICallbacks: `start webconfig [ap]` / `stop webconfig`
+  bool startWebConfig(bool force_ap, char* reply) override;
+  bool stopWebConfig(char* reply) override;
+
+  // WebConfigServer::Callbacks - all invoked from tick() on the loop task
+  void execCommand(char* cmd, char* reply) override { handleCommand(0, cmd, reply); }
+  void rebootNow() override { _cli.getBoard()->reboot(); }
+  void onConfigBatchStart() override {
+    _wc_batch_active = true;
+    _wc_restart_pending = false;
+    _wc_slot_restart_mask = 0;
+  }
+  void onConfigBatchEnd() override;
+  void buildStatsJson(char* buf, size_t buf_size) override;
 #endif
 
   // To check if there is pending work

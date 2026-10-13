@@ -24,6 +24,11 @@ public:
   virtual void begin() { }
 
   /**
+   * \returns  number of receive errors (e.g. CRC failures) since last reset; 0 if not tracked.
+  */
+  virtual uint32_t getPacketsRecvErrors() const { return 0; }
+
+  /**
    * \brief  polls for incoming raw packet.
    * \param  bytes  destination to store incoming raw packet.
    * \param  sz   maximum packet size allowed.
@@ -180,6 +185,7 @@ public:
   void releasePacket(Packet* packet);
   void sendPacket(Packet* packet, uint8_t priority, uint32_t delay_millis=0);
 
+  uint16_t getErrFlags() const { return _err_flags; }
   unsigned long getTotalAirTime() const { return total_air_time; }
   unsigned long getReceiveAirTime() const {return rx_air_time; }
   unsigned long getRemainingTxBudget() const { return tx_budget_ms; }

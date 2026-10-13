@@ -475,10 +475,16 @@ void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
   mesh::Utils::printHex(Serial, raw, len);
   Serial.println();
 #endif
+
+#ifdef WITH_MQTT_BRIDGE
+  if (_prefs.bridge_enabled && bridge) bridge->storeRawRadioData(raw, len, snr, rssi);
+#endif
 }
 
 void MyMesh::logRx(mesh::Packet *pkt, int len, float score) {
-#ifdef WITH_BRIDGE
+#if defined(WITH_MQTT_BRIDGE)
+  if (bridge) bridge->onPacketReceived(pkt);   // bridge filters by its own mqtt.rx setting
+#elif defined(WITH_BRIDGE)
   if (_prefs.bridge_pkt_src == 1) {
     bridge.sendPacket(pkt);
   }
@@ -504,7 +510,9 @@ void MyMesh::logRx(mesh::Packet *pkt, int len, float score) {
 }
 
 void MyMesh::logTx(mesh::Packet *pkt, int len) {
-#ifdef WITH_BRIDGE
+#if defined(WITH_MQTT_BRIDGE)
+  if (bridge) bridge->sendPacket(pkt);         // bridge filters by its own mqtt.tx setting
+#elif defined(WITH_BRIDGE)
   if (_prefs.bridge_pkt_src == 0) {
     bridge.sendPacket(pkt);
   }
@@ -910,6 +918,9 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
 #if defined(WITH_ESPNOW_BRIDGE)
       , bridge(&_prefs, _mgr, &rtc)
 #endif
+#if defined(WITH_MQTT_BRIDGE)
+      , bridge(nullptr)
+#endif
 {
   last_millis = 0;
   uptime_millis = 0;
@@ -1008,7 +1019,9 @@ void MyMesh::begin(FILESYSTEM *fs) {
     }
   }
 
-#if defined(WITH_BRIDGE)
+#if defined(WITH_MQTT_BRIDGE)
+  observerBegin();
+#elif defined(WITH_BRIDGE)
   if (_prefs.bridge_enabled) {
     bridge.begin();
   }
@@ -1544,7 +1557,9 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
 }
 
 void MyMesh::loop() {
-#ifdef WITH_BRIDGE
+#if defined(WITH_MQTT_BRIDGE)
+  observerLoop();
+#elif defined(WITH_BRIDGE)
   bridge.loop();
 #endif
 
@@ -1592,7 +1607,9 @@ void MyMesh::loop() {
 
 // To check if there is pending work
 bool MyMesh::hasPendingWork() const {
-#if defined(WITH_BRIDGE)
+#if defined(WITH_MQTT_BRIDGE)
+  if (bridge && bridge->isRunning()) return true;  // bridge needs WiFi radio, can't sleep
+#elif defined(WITH_BRIDGE)
   if (bridge.isRunning()) return true;  // bridge needs WiFi radio, can't sleep
 #endif
   return _mgr->getOutboundTotal() > 0;
