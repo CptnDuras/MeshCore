@@ -38,6 +38,7 @@ void CommonCLI::loadPrefs(FILESYSTEM* fs) {
       _prefs->loadSerial(file);   // new Serial prefs
       _prefs->hop_retries = constrain(_prefs->hop_retries, 0, 3);
       _prefs->hop_fallback = constrain(_prefs->hop_fallback, 0, 1);
+      _prefs->hop_rescue = constrain(_prefs->hop_rescue, 0, 1);
       _prefs->route_cache_en = constrain(_prefs->route_cache_en, 0, 1);
       _prefs->ping_en = constrain(_prefs->ping_en, 0, 1);
       mesh::routeSanitize(_prefs->route_cfg);
@@ -618,6 +619,16 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
     } else {
       strcpy(reply, "Error, must be 0 (off) to 3");
     }
+  } else if (memcmp(config, "hop.rescue ", 11) == 0) {
+    bool on;
+    if (mesh::routeParseOnOff(&config[11], &on)) {
+      _prefs->hop_rescue = on;
+      savePrefs();
+      _callbacks->onFeatureConfigChanged();
+      strcpy(reply, "OK");
+    } else {
+      strcpy(reply, "Error, must be: on or off");
+    }
   } else if (memcmp(config, "hop.fallback ", 13) == 0) {
     bool on;
     if (mesh::routeParseOnOff(&config[13], &on)) {
@@ -796,6 +807,8 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
     if (!mesh::routeGet(_prefs->route_cfg, config[5] == '.' ? &config[6] : "", reply)) strcpy(reply, "Error, unknown route setting");
   } else if (memcmp(config, "hop.retries", 11) == 0) {
     sprintf(reply, "> %d", _prefs->hop_retries);
+  } else if (strcmp(config, "hop.rescue") == 0) {
+    strcpy(reply, _prefs->hop_rescue ? "> on" : "> off");
   } else if (strcmp(config, "hop.fallback") == 0) {
     strcpy(reply, _prefs->hop_fallback ? "> on" : "> off");
   } else if (memcmp(config, "routecache", 10) == 0) {

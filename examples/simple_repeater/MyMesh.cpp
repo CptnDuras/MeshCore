@@ -553,6 +553,23 @@ bool MyMesh::routedDecision(const mesh::RoutedEnvelope& e, mesh::RoutedDecision&
   return true;
 }
 
+// Was the repeater with this hash heard in the last 10 minutes? Needs route tables (they keep a table of the repeaters heard directly).
+// Without them nothing is known, and the answer is "no", which lets a silent next hop be taken over.
+bool MyMesh::hopRecentlyHeard(const uint8_t* hash, uint8_t hsize) {
+  if (routing == NULL) return false;
+  const int id_bytes = routing->config().id_bytes;
+  const int n = hsize < id_bytes ? hsize : id_bytes;   // compare the bytes both have
+  uint8_t id[4] = {0, 0, 0, 0};
+  memcpy(id, hash, n);
+  const mesh::RouteId want = mesh::routeIdFromKey(id, n), mask = mesh::routeIdMask(n);
+  const uint32_t now = monoSeconds();
+  for (int i = 0; i < routing->links.capacity(); i++) {
+    const mesh::LinkInfo* l = routing->links.at(i);
+    if (l && (l->id & mask) == want && (uint32_t)(now - l->last_heard) < 600) return true;
+  }
+  return false;
+}
+
 uint32_t MyMesh::getRetransmitDelay(const mesh::Packet *packet) {
   uint32_t t = (_radio->getEstAirtimeFor(packet->getPathByteLen() + packet->payload_len + 2) * _prefs.tx_delay_factor);
   return getRNG()->nextInt(0, 5*t + 1);
@@ -1146,6 +1163,8 @@ void MyMesh::formatFeaturesReply(char *reply) {
     addTo(reply, cap, "hop-retry:%d (resent %lu, heard %lu) ", getHopRetries(), (unsigned long)getNumHopRetries(), (unsigned long)getNumHopAcks());
     if (getHopFallback()) addTo(reply, cap, "fallback:on (flooded %lu) ", (unsigned long)getNumHopFallbacks());
     else addTo(reply, cap, "fallback:off ");
+    if (getHopRescue()) addTo(reply, cap, "rescue:on (%lu) ", (unsigned long)getNumHopRescues());
+    else addTo(reply, cap, "rescue:off ");
   } else {
     addTo(reply, cap, "hop-retry:off ");
   }
@@ -1174,6 +1193,7 @@ uint32_t MyMesh::monoSeconds() {
 void MyMesh::applyFeatureConfig() {
   setHopRetries(_prefs.hop_retries);
   setHopFallback(_prefs.hop_fallback != 0);
+  setHopRescue(_prefs.hop_rescue != 0);
   const mesh::RouteConfigValues& v = _prefs.route_cfg;
   bool same = routing && routing_applied.id_bytes == v.id_bytes && routing_applied.full_period_s == v.full_period_s &&
               routing_applied.life_s == v.life_s && routing_applied.refresh_pct == v.refresh_pct &&

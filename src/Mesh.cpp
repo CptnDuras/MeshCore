@@ -21,7 +21,7 @@ uint32_t Mesh::hopWaitMillis(int len_bytes) const {
 // Remember a unicast packet we have just sent on, so we can send it again if the next repeater is not heard
 // passing it along. A packet with no hops left is on its last leg (to the destination, which does not forward),
 // so there is nobody to overhear.
-void Mesh::trackHopForward(const Packet* pkt, uint8_t priority, uint32_t delay_millis, bool relay) {
+void Mesh::trackHopForward(const Packet* pkt, uint8_t priority, uint32_t delay_millis, uint8_t role) {
   uint8_t count = pkt->getPathHashCount();
   if (count == 0) return;
   uint8_t type = pkt->getPayloadType();
@@ -31,7 +31,10 @@ void Mesh::trackHopForward(const Packet* pkt, uint8_t priority, uint32_t delay_m
   pkt->calculatePacketHash(hash);
   uint8_t raw[MAX_TRANS_UNIT];
   uint8_t len = pkt->writeTo(raw);
-  _hop_retry.track(hash, count - 1, raw, len, priority, _ms->getMillis() + delay_millis + hopWaitMillis(len), relay);
+  // An overheard packet is not ours to resend, so give the repeater it was meant for twice its usual time to pass it on, plus a random
+  // stagger so that, of several repeaters that heard it, usually only the first to time out floods it: the others then hear that flood.
+  uint32_t wait = role == HOP_OVERHEARD ? hopWaitMillis(len) * 2 + _rng->nextInt(0, 800) : hopWaitMillis(len);
+  _hop_retry.track(hash, count - 1, raw, len, priority, _ms->getMillis() + delay_millis + wait, role);
 }
 
 void Mesh::serviceHopRetries() {
@@ -39,8 +42,23 @@ void Mesh::serviceHopRetries() {
   int slot = _hop_retry.nextDue(now);
   if (slot < 0) return;
   const auto* e = _hop_retry.at(slot);
+  if (e->role == HOP_OVERHEARD) {   // not ours to resend: if nobody has passed it on by now, take it over
+    if (_mgr->getFreeCount() < 2) return;
+    Packet* p = obtainNewPacket();
+    if (p == NULL) return;
+    if (p->readFrom(e->raw, e->raw_len) && _hop_rescue && !_tables->wasSeen(p) && allowPacketForward(p)
+        && makeFloodFallback(p, self_id.pub_key)) {   // wasSeen: another repeater may have flooded it already
+      _tables->markSeen(p);
+      sendPacket(p, 1, _rng->nextInt(0, 400));
+      n_hop_rescues++;
+    } else {
+      releasePacket(p);
+    }
+    _hop_retry.release(slot);
+    return;
+  }
   if (e->tries >= _hop_retries_max) {   // asked enough times: the next hop is not answering
-    if (e->relay && _hop_fallback) {
+    if (e->role == HOP_RELAYED && _hop_fallback) {
       // The sender's path goes through a repeater that is gone (replaced, or down). Dropping the packet would lose the message until
       // the sender gives up on its cached path, so flood it from here instead. The far end then answers with a PATH return, which
       // replaces the sender's stale path with one through the repeaters that are really there.
@@ -192,9 +210,16 @@ DispatcherAction Mesh::onRecvPacket(Packet* pkt) {
         _tables->markSeen(pkt);
         removeSelfFromPath(pkt);
 
-        if (_hop_retries_max) trackHopForward(pkt, 0, d, true);
+        if (_hop_retries_max) trackHopForward(pkt, 0, d, HOP_RELAYED);
         return ACTION_RETRANSMIT_DELAYED(0, d);  // Routed traffic is HIGHEST priority 
       }
+    }
+    // This node is NOT the next hop (or has already forwarded it), so it does not forward it now. But if the next hop is silent (a repeater
+    // that died, or was replaced and so has a new id) nobody else will either, and the sender's path is stale. Remember the packet: if the next
+    // hop is not heard passing it on, take it over (see serviceHopRetries). Waits long enough for the next hop's own retries first.
+    if (_hop_retries_max && _hop_rescue && !self_id.isHashMatch(pkt->path, pkt->getPathHashSize()) && isHopFallbackType(pkt->getPayloadType())
+        && allowPacketForward(pkt) && !_tables->wasSeen(pkt) && !hopRecentlyHeard(pkt->path, pkt->getPathHashSize())) {
+      trackHopForward(pkt, 1, 0, HOP_OVERHEARD);
     }
     return ACTION_RELEASE;   // this node is NOT the next hop (OR this packet has already been forwarded), so discard.
   }

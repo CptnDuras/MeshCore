@@ -150,15 +150,26 @@ TEST(HopRetryTable, AForwardedCopyHasTheSameHashButAShorterPath) {
     EXPECT_TRUE(t.overheard(h2, forwarded.getPathHashCount()));
 }
 
-TEST(HopRetryTable, RemembersWhetherWeWerePassingItOnForSomeoneElse) {
+TEST(HopRetryTable, RemembersWhyItIsWaitingOnEachPacket) {
     HopRetryTable<4> t;
-    uint8_t h1[MAX_HASH_SIZE], h2[MAX_HASH_SIZE]; hashOf(10, h1); hashOf(50, h2);
-    int own = t.track(h1, 2, RAW, sizeof(RAW), 0, 1000);              // our own send: no flag
-    int relayed = t.track(h2, 2, RAW, sizeof(RAW), 0, 1000, true);    // relayed for someone else
+    uint8_t h1[MAX_HASH_SIZE], h2[MAX_HASH_SIZE], h3[MAX_HASH_SIZE]; hashOf(10, h1); hashOf(50, h2); hashOf(90, h3);
+    int own = t.track(h1, 2, RAW, sizeof(RAW), 0, 1000);                          // our own send
+    int relayed = t.track(h2, 2, RAW, sizeof(RAW), 0, 1000, HOP_RELAYED);         // passed on for someone else
+    int heard = t.track(h3, 2, RAW, sizeof(RAW), 0, 1000, HOP_OVERHEARD);         // only heard going by
     ASSERT_GE(own, 0);
     ASSERT_GE(relayed, 0);
-    EXPECT_FALSE(t.at(own)->relay);
-    EXPECT_TRUE(t.at(relayed)->relay);
+    ASSERT_GE(heard, 0);
+    EXPECT_EQ(HOP_OWN, t.at(own)->role);
+    EXPECT_EQ(HOP_RELAYED, t.at(relayed)->role);
+    EXPECT_EQ(HOP_OVERHEARD, t.at(heard)->role);
+}
+
+TEST(HopRetryTable, TheNextHopPassingAnOverheardPacketOnClearsIt) {
+    HopRetryTable<4> t;
+    uint8_t h[MAX_HASH_SIZE]; hashOf(30, h);
+    ASSERT_GE(t.track(h, 2, RAW, sizeof(RAW), 0, 1000, HOP_OVERHEARD), 0);
+    EXPECT_TRUE(t.overheard(h, 2));      // so there is nothing to take over
+    EXPECT_EQ(-1, t.nextDue(5000));
 }
 
 int main(int argc, char** argv) {

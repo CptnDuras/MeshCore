@@ -165,6 +165,7 @@ protected:
 
   uint32_t getRetransmitDelay(const mesh::Packet* packet) override;
   bool routedDecision(const mesh::RoutedEnvelope& e, mesh::RoutedDecision& d) override;
+  bool hopRecentlyHeard(const uint8_t* hash, uint8_t hsize) override;
   uint32_t getDirectRetransmitDelay(const mesh::Packet* packet) override;
 
   int getInterferenceThreshold() const override {
