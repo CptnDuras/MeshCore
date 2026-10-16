@@ -28,6 +28,7 @@ public:
     uint8_t  tries;             // retries done so far
     uint8_t  raw_len;
     uint8_t  priority;
+    bool     relay;             // this node was passing the packet on for someone else (not its own send)
     uint32_t due;               // when to give up waiting and send again (millis)
     uint8_t  raw[MAX_TRANS_UNIT];
   };
@@ -50,7 +51,7 @@ public:
 
   /** \returns the slot used, or -1 if there was no room (or the packet is already tracked) */
   int track(const uint8_t* hash, uint8_t next_path_count, const uint8_t* raw, uint8_t raw_len,
-            uint8_t priority, uint32_t due) {
+            uint8_t priority, uint32_t due, bool relay = false) {
     int free_slot = -1;
     for (int i = 0; i < CAPACITY; i++) {
       if (entries[i].used) {
@@ -67,6 +68,7 @@ public:
     e.tries = 0;
     e.raw_len = raw_len;
     e.priority = priority;
+    e.relay = relay;
     e.due = due;
     memcpy(e.raw, raw, raw_len);
     return free_slot;

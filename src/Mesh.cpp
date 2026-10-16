@@ -21,7 +21,7 @@ uint32_t Mesh::hopWaitMillis(int len_bytes) const {
 // Remember a unicast packet we have just sent on, so we can send it again if the next repeater is not heard
 // passing it along. A packet with no hops left is on its last leg (to the destination, which does not forward),
 // so there is nobody to overhear.
-void Mesh::trackHopForward(const Packet* pkt, uint8_t priority, uint32_t delay_millis) {
+void Mesh::trackHopForward(const Packet* pkt, uint8_t priority, uint32_t delay_millis, bool relay) {
   uint8_t count = pkt->getPathHashCount();
   if (count == 0) return;
   uint8_t type = pkt->getPayloadType();
@@ -31,7 +31,7 @@ void Mesh::trackHopForward(const Packet* pkt, uint8_t priority, uint32_t delay_m
   pkt->calculatePacketHash(hash);
   uint8_t raw[MAX_TRANS_UNIT];
   uint8_t len = pkt->writeTo(raw);
-  _hop_retry.track(hash, count - 1, raw, len, priority, _ms->getMillis() + delay_millis + hopWaitMillis(len));
+  _hop_retry.track(hash, count - 1, raw, len, priority, _ms->getMillis() + delay_millis + hopWaitMillis(len), relay);
 }
 
 void Mesh::serviceHopRetries() {
@@ -39,7 +39,22 @@ void Mesh::serviceHopRetries() {
   int slot = _hop_retry.nextDue(now);
   if (slot < 0) return;
   const auto* e = _hop_retry.at(slot);
-  if (e->tries >= _hop_retries_max) {   // asked enough times: give up on this hop
+  if (e->tries >= _hop_retries_max) {   // asked enough times: the next hop is not answering
+    if (e->relay && _hop_fallback) {
+      // The sender's path goes through a repeater that is gone (replaced, or down). Dropping the packet would lose the message until
+      // the sender gives up on its cached path, so flood it from here instead. The far end then answers with a PATH return, which
+      // replaces the sender's stale path with one through the repeaters that are really there.
+      if (_mgr->getFreeCount() < 2) return;   // try again when there are buffers; the entry stays
+      Packet* p = obtainNewPacket();
+      if (p == NULL) return;
+      if (p->readFrom(e->raw, e->raw_len) && allowPacketForward(p) && makeFloodFallback(p, self_id.pub_key)) {
+        _tables->markSeen(p);
+        sendPacket(p, 1, _rng->nextInt(0, 400));
+        n_hop_fallbacks++;
+      } else {
+        releasePacket(p);
+      }
+    }
     _hop_retry.release(slot);
     return;
   }
@@ -177,7 +192,7 @@ DispatcherAction Mesh::onRecvPacket(Packet* pkt) {
         _tables->markSeen(pkt);
         removeSelfFromPath(pkt);
 
-        if (_hop_retries_max) trackHopForward(pkt, 0, d);
+        if (_hop_retries_max) trackHopForward(pkt, 0, d, true);
         return ACTION_RETRANSMIT_DELAYED(0, d);  // Routed traffic is HIGHEST priority 
       }
     }

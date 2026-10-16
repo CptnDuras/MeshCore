@@ -2,6 +2,7 @@
 
 #include <Dispatcher.h>
 #include <helpers/HopRetryTable.h>
+#include <helpers/HopFallback.h>
 #include <helpers/PingProtocol.h>
 #include <helpers/RoutedPacket.h>
 #include <helpers/RoutedHints.h>
@@ -44,10 +45,11 @@ class Mesh : public Dispatcher {
   MeshTables* _tables;
 
   HopRetryTable<MESH_HOP_PENDING> _hop_retry;
-  uint32_t n_hop_retries, n_hop_acks;
+  uint32_t n_hop_retries, n_hop_acks, n_hop_fallbacks;
   uint8_t _hop_retries_max;
+  bool _hop_fallback;   // flood a relayed unicast packet when the next hop never answers, instead of dropping it
   uint32_t hopWaitMillis(int len_bytes) const;
-  void trackHopForward(const Packet* pkt, uint8_t priority, uint32_t delay_millis);
+  void trackHopForward(const Packet* pkt, uint8_t priority, uint32_t delay_millis, bool relay = false);
   void serviceHopRetries();
 
   // routed forwarding (see helpers/RoutedPacket.h)
@@ -224,13 +226,17 @@ protected:
   Mesh(Radio& radio, MillisecondClock& ms, RNG& rng, RTCClock& rtc, PacketManager& mgr, MeshTables& tables)
     : Dispatcher(radio, ms, mgr), _rng(&rng), _rtc(&rtc), _tables(&tables)
   {
-    n_hop_retries = n_hop_acks = 0;
+    n_hop_retries = n_hop_acks = n_hop_fallbacks = 0;
+    _hop_fallback = true;
     n_routed_fwd = n_routed_delivered = n_routed_dropped = n_routed_sent = 0;
     _hop_retries_max = MESH_HOP_RETRIES;
   }
 
   uint32_t getNumHopRetries() const { return n_hop_retries; }   // unicast packets sent again
   uint32_t getNumHopAcks() const { return n_hop_acks; }         // times the next hop was heard passing one on
+  uint32_t getNumHopFallbacks() const { return n_hop_fallbacks; } // relayed packets flooded because the next hop never answered
+  bool getHopFallback() const { return _hop_fallback; }
+  void setHopFallback(bool on) { _hop_fallback = on; }
   uint8_t getHopRetries() const { return _hop_retries_max; }
   void setHopRetries(uint8_t n) {                               // 0 = off. Packets already waited on are dropped when it is turned off.
     _hop_retries_max = n;

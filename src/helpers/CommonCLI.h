@@ -75,6 +75,7 @@ public:
   uint8_t extra_sf[4];
   // Optional features: all compiled in, all switched here at runtime
   uint8_t hop_retries = 2;      // times a unicast packet is sent again when the next repeater is not heard passing it on (0 = off, 0-3)
+  uint8_t hop_fallback = 1;     // flood a packet this repeater was relaying when the next repeater never answers (0 = drop it, as before)
   uint8_t route_cache_en = 1;   // remember the paths adverts took (the `routes` command)
   uint8_t ping_en = 1;          // answer zero-hop pings from clients
   mesh::RouteConfigValues route_cfg;   // route tables and adverts (off by default)
@@ -214,6 +215,7 @@ private:
   protected:
     void structure() override {
       def("hop", _parent->hop_retries);
+      def("hopfb", _parent->hop_fallback);
       def("rcache", _parent->route_cache_en);
       def("ping", _parent->ping_en);
     }

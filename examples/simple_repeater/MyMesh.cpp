@@ -1144,6 +1144,8 @@ void MyMesh::formatFeaturesReply(char *reply) {
   reply[0] = 0;
   if (getHopRetries()) {
     addTo(reply, cap, "hop-retry:%d (resent %lu, heard %lu) ", getHopRetries(), (unsigned long)getNumHopRetries(), (unsigned long)getNumHopAcks());
+    if (getHopFallback()) addTo(reply, cap, "fallback:on (flooded %lu) ", (unsigned long)getNumHopFallbacks());
+    else addTo(reply, cap, "fallback:off ");
   } else {
     addTo(reply, cap, "hop-retry:off ");
   }
@@ -1171,6 +1173,7 @@ uint32_t MyMesh::monoSeconds() {
 
 void MyMesh::applyFeatureConfig() {
   setHopRetries(_prefs.hop_retries);
+  setHopFallback(_prefs.hop_fallback != 0);
   const mesh::RouteConfigValues& v = _prefs.route_cfg;
   bool same = routing && routing_applied.id_bytes == v.id_bytes && routing_applied.full_period_s == v.full_period_s &&
               routing_applied.life_s == v.life_s && routing_applied.refresh_pct == v.refresh_pct &&
