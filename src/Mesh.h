@@ -2,6 +2,7 @@
 
 #include <Dispatcher.h>
 #include <helpers/HopRetryTable.h>
+#include <helpers/HopFallback.h>
 #include <helpers/PingProtocol.h>
 #include <helpers/RoutedPacket.h>
 #include <helpers/RoutedHints.h>
@@ -44,10 +45,12 @@ class Mesh : public Dispatcher {
   MeshTables* _tables;
 
   HopRetryTable<MESH_HOP_PENDING> _hop_retry;
-  uint32_t n_hop_retries, n_hop_acks;
+  uint32_t n_hop_retries, n_hop_acks, n_hop_fallbacks, n_hop_rescues;
   uint8_t _hop_retries_max;
+  bool _hop_fallback;   // flood a relayed unicast packet when the next hop never answers, instead of dropping it
+  bool _hop_rescue;     // ...and also take over a unicast packet this node only overheard, when its next hop never passes it on
   uint32_t hopWaitMillis(int len_bytes) const;
-  void trackHopForward(const Packet* pkt, uint8_t priority, uint32_t delay_millis);
+  void trackHopForward(const Packet* pkt, uint8_t priority, uint32_t delay_millis, uint8_t role = HOP_OWN);
   void serviceHopRetries();
 
   // routed forwarding (see helpers/RoutedPacket.h)
@@ -61,7 +64,7 @@ class Mesh : public Dispatcher {
   void removeSelfFromPath(Packet* packet);
   void routeDirectRecvAcks(Packet* packet, uint32_t delay_millis);
   //void routeRecvAcks(Packet* packet, uint32_t delay_millis);
-  DispatcherAction forwardMultipartDirect(Packet* pkt);
+  DispatcherAction forwardMultipartDirect(Packet* pkt, uint32_t delay_millis);
 
 protected:
   DispatcherAction onRecvPacket(Packet* pkt) override;
@@ -219,18 +222,28 @@ protected:
    *         everything else leaves it at the default, which drops the envelope.
    * \returns true if `d` was filled in
    */
+  // has the repeater with this id (first `hsize` bytes of its public key) been heard lately? If so a packet it was handed is not taken over
+  virtual bool hopRecentlyHeard(const uint8_t* hash, uint8_t hsize) { return false; }
   virtual bool routedDecision(const RoutedEnvelope& e, RoutedDecision& d) { return false; }
 
   Mesh(Radio& radio, MillisecondClock& ms, RNG& rng, RTCClock& rtc, PacketManager& mgr, MeshTables& tables)
     : Dispatcher(radio, ms, mgr), _rng(&rng), _rtc(&rtc), _tables(&tables)
   {
-    n_hop_retries = n_hop_acks = 0;
+    n_hop_retries = n_hop_acks = n_hop_fallbacks = n_hop_rescues = 0;
+    _hop_fallback = true;
+    _hop_rescue = true;
     n_routed_fwd = n_routed_delivered = n_routed_dropped = n_routed_sent = 0;
     _hop_retries_max = MESH_HOP_RETRIES;
   }
 
   uint32_t getNumHopRetries() const { return n_hop_retries; }   // unicast packets sent again
   uint32_t getNumHopAcks() const { return n_hop_acks; }         // times the next hop was heard passing one on
+  uint32_t getNumHopFallbacks() const { return n_hop_fallbacks; } // relayed packets flooded because the next hop never answered
+  bool getHopFallback() const { return _hop_fallback; }
+  void setHopFallback(bool on) { _hop_fallback = on; }
+  uint32_t getNumHopRescues() const { return n_hop_rescues; }   // overheard packets taken over because their next hop never passed them on
+  bool getHopRescue() const { return _hop_rescue; }
+  void setHopRescue(bool on) { _hop_rescue = on; }
   uint8_t getHopRetries() const { return _hop_retries_max; }
   void setHopRetries(uint8_t n) {                               // 0 = off. Packets already waited on are dropped when it is turned off.
     _hop_retries_max = n;

@@ -82,11 +82,11 @@ struct NeighbourInfo {
 };
 
 #ifndef FIRMWARE_BUILD_DATE
-  #define FIRMWARE_BUILD_DATE   "14 Aug 2026"
+  #define FIRMWARE_BUILD_DATE   "15 Oct 2026"
 #endif
 
 #ifndef FIRMWARE_VERSION
-  #define FIRMWARE_VERSION   "v1.17.1"
+  #define FIRMWARE_VERSION   "v1.18.0"
 #endif
 
 #define FIRMWARE_ROLE "repeater"
@@ -184,6 +184,7 @@ protected:
 
   uint32_t getRetransmitDelay(const mesh::Packet* packet) override;
   bool routedDecision(const mesh::RoutedEnvelope& e, mesh::RoutedDecision& d) override;
+  bool hopRecentlyHeard(const uint8_t* hash, uint8_t hsize) override;
   uint32_t getDirectRetransmitDelay(const mesh::Packet* packet) override;
 
   int getInterferenceThreshold() const override {

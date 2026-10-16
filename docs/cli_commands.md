@@ -127,9 +127,9 @@ This document provides an overview of CLI commands that can be sent to MeshCore 
 **Usage:** `features`
 
 All of these features are in every build and are switched at runtime, with the settings below. The reply is one line, for example
-`hop-retry:2 (resent 5, next hop heard 118) route-cache:12/32 ping:on route:on (neighbours 3, clients 2, routes 9)`. `resent` is how
+`hop-retry:2 (resent 5, heard 118) fallback:on (flooded 1) rescue:on (2) route-cache:12/32 ping:on route:on (neighbours 3, clients 2, routes 9)`. `resent` is how
 many unicast packets were sent again because the next repeater was not heard passing them on; `next hop heard` is how many times it
-was. `off` means the feature is switched off.
+was. `flooded` is how many relayed packets were flooded because the next repeater never answered (`hop.fallback`), and `rescue` how many overheard packets were taken over (`hop.rescue`). `off` means the feature is switched off.
 
 ---
 
@@ -139,6 +139,18 @@ Saved with the other settings; they take effect at once.
 
 - `get hop.retries` / `set hop.retries <0-3>`: after sending a unicast packet to the next repeater, listen for it being passed on and
   send it again up to this many times if it is not heard. 0 = off. Default 2.
+- `get hop.fallback` / `set hop.fallback <on|off>`: when the retries run out (the next repeater on the packet's path is gone, for
+  example a repeater that died and was replaced, so its id is new), flood the packet from here instead of dropping it. It applies
+  only to packets this repeater was passing on for someone else, never its own, and only to messages, requests, replies, acks and
+  path returns. The flood starts with this repeater's hash in its path, so the far end's path return gives the sender a route it can
+  use, replacing its stale cached one. A scoped packet stays in its scope; an unscoped one floods unscoped, so a network that blocks
+  unscoped floods drops it. Needs `hop.retries` above 0. Default on.
+- `get hop.rescue` / `set hop.rescue <on|off>`: also act on a unicast packet this repeater only *overheard*, that is addressed to another
+  repeater as the next hop. If that repeater is not heard passing it on within about twice its normal time (plus a random stagger, so
+  usually only one of several listeners acts), flood it from here, the same way as `hop.fallback`. This covers the first hop: a client
+  whose cached path starts at a repeater that has died is still heard by the repeaters around it. Not done for a next hop heard in the
+  last 10 minutes (needs route tables to know) or when a flood of the same packet has already been heard. Needs `hop.retries` above 0.
+  Default on.
 - `get routecache` / `set routecache <on|off>`: remember the path each verified advert took (the `routes` command). Default on.
 - `get ping` / `set ping <on|off>`: answer zero-hop pings from clients. Default on.
 

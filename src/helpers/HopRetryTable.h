@@ -6,6 +6,13 @@
 
 namespace mesh {
 
+// why an entry is being waited on
+enum HopRole : uint8_t {
+  HOP_OWN,        // our own send
+  HOP_RELAYED,    // we passed it on for someone else
+  HOP_OVERHEARD,  // not for us: we heard it go by, and take it over if the next hop never passes it on
+};
+
 /**
  * \brief  Remembers unicast (DIRECT) packets this node has just sent on, so it can send them again if it does
  *         not hear the next repeater pass them along.
@@ -28,6 +35,7 @@ public:
     uint8_t  tries;             // retries done so far
     uint8_t  raw_len;
     uint8_t  priority;
+    uint8_t  role;              // HopRole
     uint32_t due;               // when to give up waiting and send again (millis)
     uint8_t  raw[MAX_TRANS_UNIT];
   };
@@ -50,7 +58,7 @@ public:
 
   /** \returns the slot used, or -1 if there was no room (or the packet is already tracked) */
   int track(const uint8_t* hash, uint8_t next_path_count, const uint8_t* raw, uint8_t raw_len,
-            uint8_t priority, uint32_t due) {
+            uint8_t priority, uint32_t due, uint8_t role = HOP_OWN) {
     int free_slot = -1;
     for (int i = 0; i < CAPACITY; i++) {
       if (entries[i].used) {
@@ -67,6 +75,7 @@ public:
     e.tries = 0;
     e.raw_len = raw_len;
     e.priority = priority;
+    e.role = role;
     e.due = due;
     memcpy(e.raw, raw, raw_len);
     return free_slot;
