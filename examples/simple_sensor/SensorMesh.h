@@ -135,11 +135,13 @@ protected:
   void onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender_idx, const uint8_t* secret, uint8_t* data, size_t len) override;
   bool onPeerPathRecv(mesh::Packet* packet, int sender_idx, const uint8_t* secret, uint8_t* path, uint8_t path_len, uint8_t extra_type, uint8_t* extra, uint8_t extra_len) override;
   void onControlDataRecv(mesh::Packet* packet) override;
+  void onPingRecv(mesh::Packet* packet, const mesh::PingRequest& req) override;
   void onAckRecv(mesh::Packet* packet, uint32_t ack_crc) override;
 
   virtual bool handleIncomingMsg(ClientInfo& from, uint32_t timestamp, uint8_t* data, uint8_t flags, size_t len);
   void sendAckTo(const ClientInfo& dest, uint32_t ack_hash, uint8_t path_hash_size=1);
 private:
+  mesh::PingRateLimiter ping_limiter;   // how often this node answers pings
   FILESYSTEM* _fs;
   unsigned long next_local_advert, next_flood_advert;
   NodePrefs _prefs;

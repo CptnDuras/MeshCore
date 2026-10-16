@@ -43,7 +43,7 @@ mesh::Packet* BaseChatMesh::createSelfAdvert(const char* name, double lat, doubl
 void BaseChatMesh::sendAckTo(const ContactInfo& dest, const uint8_t* ack_hash, uint8_t ack_len) {
   if (dest.out_path_len == OUT_PATH_UNKNOWN) {
     mesh::Packet* ack = createAck(ack_hash, ack_len);
-    if (ack) sendFloodScoped(dest, ack, TXT_ACK_DELAY);
+    if (ack && !sendRoutedTo(dest, ack, TXT_ACK_DELAY)) sendFloodScoped(dest, ack, TXT_ACK_DELAY);
   } else {
     uint32_t d = TXT_ACK_DELAY;
     if (getExtraAckTransmitCount() > 0) {
@@ -197,6 +197,7 @@ void BaseChatMesh::onAdvertRecv(mesh::Packet* packet, const mesh::Identity& id, 
   from->last_advert_timestamp = timestamp;
   from->lastmod = getRTCClock()->getCurrentTime();
 
+  rememberHome(id, packet);
   onDiscoveredContact(*from, is_new, packet->path_len, packet->path);       // let UI know
 }
 
@@ -227,6 +228,7 @@ void BaseChatMesh::onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender
   }
 
   ContactInfo& from = contacts[i];
+  rememberHome(from.id, packet);   // a flood from them shows where they live
 
   if (type == PAYLOAD_TYPE_TXT_MSG && len > 5) {
     uint32_t sender_timestamp;
@@ -478,15 +480,36 @@ int  BaseChatMesh::sendMessage(const ContactInfo& recipient, uint32_t timestamp,
 
   int rc;
   if (recipient.out_path_len == OUT_PATH_UNKNOWN) {
-    sendFloodScoped(recipient, pkt);
-    txt_send_timeout = futureMillis(est_timeout = calcFloodTimeoutMillisFor(t));
-    rc = MSG_SEND_SENT_FLOOD;
+    if (mesh::chooseSendStep(false, attempt, MESH_ROUTED_TRIES) == mesh::SEND_ROUTED && sendRoutedTo(recipient, pkt, 0)) {   // no cached path: the route tables, for the first tries
+      txt_send_timeout = futureMillis(est_timeout = calcFloodTimeoutMillisFor(t));   // as long as a flood: we do not know how many hops
+      rc = MSG_SEND_SENT_DIRECT;
+    } else {
+      sendFloodScoped(recipient, pkt);
+      txt_send_timeout = futureMillis(est_timeout = calcFloodTimeoutMillisFor(t));
+      rc = MSG_SEND_SENT_FLOOD;
+    }
   } else {
     sendDirect(pkt, recipient.out_path, recipient.out_path_len);
     txt_send_timeout = futureMillis(est_timeout = calcDirectTimeoutMillisFor(t, recipient.out_path_len));
     rc = MSG_SEND_SENT_DIRECT;
   }
   return rc;
+}
+
+// Sends pkt as a ROUTED envelope to dest's home repeater, if routing is on, we know where dest lives and our nearest repeater is known
+// to route. True if it went (pkt is then spent); false leaves pkt for the caller to flood.
+bool BaseChatMesh::sendRoutedTo(const ContactInfo& dest, mesh::Packet* pkt, uint32_t delay_millis) {
+  if (!_routed_send) return false;
+  uint8_t home[3];
+  uint8_t hs;
+  if (!_homes.get(dest.id.pub_key, home, hs)) return false;
+  return sendRouted(pkt, home, hs, delay_millis);
+}
+
+// The first repeater on the path of a flood from this contact is the one that heard them first: their home.
+void BaseChatMesh::rememberHome(const mesh::Identity& id, const mesh::Packet* packet) {
+  if (!packet->isRouteFlood() || packet->getPathHashCount() == 0) return;
+  _homes.set(id.pub_key, packet->path, packet->getPathHashSize(), _ms->getMillis() / 1000);
 }
 
 int  BaseChatMesh::sendCommandData(const ContactInfo& recipient, uint32_t timestamp, uint8_t attempt, uint8_t txt_type, const char* text, uint32_t& est_timeout) {
@@ -504,9 +527,14 @@ int  BaseChatMesh::sendCommandData(const ContactInfo& recipient, uint32_t timest
   uint32_t t = _radio->getEstAirtimeFor(pkt->getRawLength());
   int rc;
   if (recipient.out_path_len == OUT_PATH_UNKNOWN) {
-    sendFloodScoped(recipient, pkt);
-    txt_send_timeout = futureMillis(est_timeout = calcFloodTimeoutMillisFor(t));
-    rc = MSG_SEND_SENT_FLOOD;
+    if (mesh::chooseSendStep(false, attempt, MESH_ROUTED_TRIES) == mesh::SEND_ROUTED && sendRoutedTo(recipient, pkt, 0)) {
+      txt_send_timeout = futureMillis(est_timeout = calcFloodTimeoutMillisFor(t));
+      rc = MSG_SEND_SENT_DIRECT;
+    } else {
+      sendFloodScoped(recipient, pkt);
+      txt_send_timeout = futureMillis(est_timeout = calcFloodTimeoutMillisFor(t));
+      rc = MSG_SEND_SENT_FLOOD;
+    }
   } else {
     sendDirect(pkt, recipient.out_path, recipient.out_path_len);
     txt_send_timeout = futureMillis(est_timeout = calcDirectTimeoutMillisFor(t, recipient.out_path_len));

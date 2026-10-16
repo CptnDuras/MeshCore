@@ -17,3 +17,7 @@ compile_commands.json
 .venv/
 venv/
 platformio.local.ini
+src/helpers/esp32/WebConfigHtml.h
+src/certs/
+ssl_certs/
+scripts/__pycache__/

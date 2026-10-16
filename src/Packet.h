@@ -28,6 +28,7 @@ namespace mesh {
 #define PAYLOAD_TYPE_TRACE       0x09    // trace a path, collecting SNR for each hop
 #define PAYLOAD_TYPE_MULTIPART   0x0A    // packet is one of a set of packets
 #define PAYLOAD_TYPE_CONTROL     0x0B    // a control/discovery packet
+#define PAYLOAD_TYPE_ROUTED      0x0C    // an envelope for a packet sent repeater to repeater from the route tables (see helpers/RoutedPacket.h)
 //...
 #define PAYLOAD_TYPE_RAW_CUSTOM   0x0F    // custom packet as raw bytes, for applications with custom encryption, payloads, etc
 

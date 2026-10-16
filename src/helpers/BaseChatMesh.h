@@ -38,6 +38,20 @@ public:
   #define MAX_CONTACTS  32
 #endif
 
+// Sending by the repeaters' route tables when there is no cached path (see helpers/RoutedPacket.h). The order for a message is: the cached
+// path if there is one; else, for the first MESH_ROUTED_TRIES attempts, a ROUTED envelope to the contact's home repeater, if our nearest
+// repeater is known to route; else a flood. (The app counts the attempts and resets the path after failures, which is what moves a
+// message from one step to the next.) 0 turns it off.
+#ifndef MESH_ROUTED_SEND
+  #define MESH_ROUTED_SEND  1
+#endif
+#ifndef MESH_ROUTED_TRIES
+  #define MESH_ROUTED_TRIES  2
+#endif
+#ifndef MESH_HOME_CACHE
+  #define MESH_HOME_CACHE  64
+#endif
+
 #define MAX_ANON_CONTACTS  8
 
 #ifndef MAX_CONNECTIONS
@@ -71,11 +85,15 @@ class BaseChatMesh : public mesh::Mesh {
   int num_channels;  // only for addChannel()
 #endif
   mesh::Packet* _pendingLoopback;
+  mesh::HomeCache<MESH_HOME_CACHE> _homes;    // each contact's home repeater, from the first hop of their adverts and floods
+  bool _routed_send;
   uint8_t temp_buf[MAX_TRANS_UNIT];
   ConnectionInfo connections[MAX_CONNECTIONS];
 
   mesh::Packet* composeMsgPacket(const ContactInfo& recipient, uint32_t timestamp, uint8_t attempt, const char *text, uint32_t& expected_ack);
   void sendAckTo(const ContactInfo& dest, const uint8_t* ack_hash, uint8_t ack_len=4);
+  void rememberHome(const mesh::Identity& id, const mesh::Packet* packet);
+  bool sendRoutedTo(const ContactInfo& dest, mesh::Packet* pkt, uint32_t delay_millis);
 
 protected:
   BaseChatMesh(mesh::Radio& radio, mesh::MillisecondClock& ms, mesh::RNG& rng, mesh::RTCClock& rtc, mesh::PacketManager& mgr, mesh::MeshTables& tables)
@@ -88,6 +106,7 @@ protected:
     num_channels = 0;
   #endif
     txt_send_timeout = 0;
+    _routed_send = MESH_ROUTED_SEND != 0;
     _pendingLoopback = NULL;
     memset(connections, 0, sizeof(connections));
   }
@@ -168,6 +187,8 @@ public:
   uint8_t exportContact(const ContactInfo& contact, uint8_t dest_buf[]);
   bool importContact(const uint8_t src_buf[], uint8_t len);
   void resetPathTo(ContactInfo& recipient);
+  void setRoutedSend(bool on) { _routed_send = on; }
+  bool getRoutedSend() const { return _routed_send; }
   void scanRecentContacts(int last_n, ContactVisitor* visitor);
   ContactInfo* searchContactsByPrefix(const char* name_prefix);
   ContactInfo* lookupContactByPubKey(const uint8_t* pub_key, int prefix_len);

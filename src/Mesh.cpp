@@ -9,6 +9,85 @@ void Mesh::begin() {
 
 void Mesh::loop() {
   Dispatcher::loop();
+  if (_hop_retries_max) serviceHopRetries();
+}
+
+// How long to wait for the next repeater to pass a packet on: its turn to hear us, our packet's airtime, and
+// its turn to send.
+uint32_t Mesh::hopWaitMillis(int len_bytes) const {
+  return _radio->getEstAirtimeFor(len_bytes) * 3 + 600;
+}
+
+// Remember a unicast packet we have just sent on, so we can send it again if the next repeater is not heard
+// passing it along. A packet with no hops left is on its last leg (to the destination, which does not forward),
+// so there is nobody to overhear.
+void Mesh::trackHopForward(const Packet* pkt, uint8_t priority, uint32_t delay_millis, uint8_t role) {
+  uint8_t count = pkt->getPathHashCount();
+  if (count == 0) return;
+  uint8_t type = pkt->getPayloadType();
+  if (type == PAYLOAD_TYPE_TRACE || type == PAYLOAD_TYPE_MULTIPART) return;
+
+  uint8_t hash[MAX_HASH_SIZE];
+  pkt->calculatePacketHash(hash);
+  uint8_t raw[MAX_TRANS_UNIT];
+  uint8_t len = pkt->writeTo(raw);
+  // An overheard packet is not ours to resend, so give the repeater it was meant for twice its usual time to pass it on, plus a random
+  // stagger so that, of several repeaters that heard it, usually only the first to time out floods it: the others then hear that flood.
+  uint32_t wait = role == HOP_OVERHEARD ? hopWaitMillis(len) * 2 + _rng->nextInt(0, 800) : hopWaitMillis(len);
+  _hop_retry.track(hash, count - 1, raw, len, priority, _ms->getMillis() + delay_millis + wait, role);
+}
+
+void Mesh::serviceHopRetries() {
+  uint32_t now = _ms->getMillis();
+  int slot = _hop_retry.nextDue(now);
+  if (slot < 0) return;
+  const auto* e = _hop_retry.at(slot);
+  if (e->role == HOP_OVERHEARD) {   // not ours to resend: if nobody has passed it on by now, take it over
+    if (_mgr->getFreeCount() < 2) return;
+    Packet* p = obtainNewPacket();
+    if (p == NULL) return;
+    if (p->readFrom(e->raw, e->raw_len) && _hop_rescue && !_tables->wasSeen(p) && allowPacketForward(p)
+        && makeFloodFallback(p, self_id.pub_key)) {   // wasSeen: another repeater may have flooded it already
+      _tables->markSeen(p);
+      sendPacket(p, 1, _rng->nextInt(0, 400));
+      n_hop_rescues++;
+    } else {
+      releasePacket(p);
+    }
+    _hop_retry.release(slot);
+    return;
+  }
+  if (e->tries >= _hop_retries_max) {   // asked enough times: the next hop is not answering
+    if (e->role == HOP_RELAYED && _hop_fallback) {
+      // The sender's path goes through a repeater that is gone (replaced, or down). Dropping the packet would lose the message until
+      // the sender gives up on its cached path, so flood it from here instead. The far end then answers with a PATH return, which
+      // replaces the sender's stale path with one through the repeaters that are really there.
+      if (_mgr->getFreeCount() < 2) return;   // try again when there are buffers; the entry stays
+      Packet* p = obtainNewPacket();
+      if (p == NULL) return;
+      if (p->readFrom(e->raw, e->raw_len) && allowPacketForward(p) && makeFloodFallback(p, self_id.pub_key)) {
+        _tables->markSeen(p);
+        sendPacket(p, 1, _rng->nextInt(0, 400));
+        n_hop_fallbacks++;
+      } else {
+        releasePacket(p);
+      }
+    }
+    _hop_retry.release(slot);
+    return;
+  }
+  if (_mgr->getFreeCount() < 2) return;   // keep the last packet buffers for traffic we are receiving
+  Packet* p = obtainNewPacket();
+  if (p == NULL) return;
+  if (!p->readFrom(e->raw, e->raw_len)) {
+    releasePacket(p);
+    _hop_retry.release(slot);
+    return;
+  }
+  uint32_t jitter = _rng->nextInt(0, 400);
+  sendPacket(p, e->priority, jitter);
+  _hop_retry.retried(slot, now + jitter + hopWaitMillis(e->raw_len));
+  n_hop_retries++;
 }
 
 bool Mesh::allowPacketForward(const mesh::Packet* packet) { 
@@ -39,6 +118,17 @@ int Mesh::searchChannelsByHash(const uint8_t* hash, GroupChannel channels[], int
 }
 
 DispatcherAction Mesh::onRecvPacket(Packet* pkt) {
+  if (pkt->isRouteFlood() && pkt->getPathHashCount() > 0) {
+    // the last hash on a flood's path is the repeater we heard it from: our nearest repeater, for sending by the route tables
+    uint8_t hs = pkt->getPathHashSize();
+    _entry.heard(&pkt->path[(pkt->getPathHashCount() - 1) * hs], hs, pkt->_snr, nowSeconds());
+  }
+  if (_hop_retries_max && pkt->isRouteDirect() && _hop_retry.count() > 0) {
+    // is this the next repeater passing along a packet we sent on? Same hash, one hop shorter.
+    uint8_t h[MAX_HASH_SIZE];
+    pkt->calculatePacketHash(h);
+    if (_hop_retry.overheard(h, pkt->getPathHashCount())) n_hop_acks++;
+  }
   if (pkt->isRouteDirect() && pkt->getPayloadType() == PAYLOAD_TYPE_TRACE) {
     if (pkt->path_len < MAX_PATH_SIZE) {
       uint8_t i = 0;
@@ -67,9 +157,26 @@ DispatcherAction Mesh::onRecvPacket(Packet* pkt) {
     return ACTION_RELEASE;
   }
 
+  if (pkt->isRouteDirect() && pkt->getPayloadType() == PAYLOAD_TYPE_ROUTED) {
+    return onRoutedPacket(pkt);
+  }
+
   if (pkt->isRouteDirect() && pkt->getPayloadType() == PAYLOAD_TYPE_CONTROL && (pkt->payload[0] & 0x80) != 0) {
     if (pkt->getPathHashCount() == 0) {
-      onControlDataRecv(pkt);
+      if (pkt->payload_len >= 2 && (pkt->payload[0] & 0xF0) == 0xC0) {   // a route advert: 0xC0|flags, then the sender's id (2 to 4 bytes)
+        static const uint8_t id_bytes_for_code[] = {2, 3, 4, 4};
+        uint8_t n = id_bytes_for_code[(pkt->payload[0] >> 2) & 0x03];
+        if (pkt->payload_len >= 1 + n) _routing_seen.heard(&pkt->payload[1], n, nowSeconds());
+      }
+      PingRequest rq;
+      PingResponse rs;
+      if (pingDecodeRequest(pkt->payload, pkt->payload_len, rq)) {
+        onPingRecv(pkt, rq);
+      } else if (pingDecodeResponse(pkt->payload, pkt->payload_len, rs)) {
+        onPingRespRecv(pkt, rs);
+      } else {
+        onControlDataRecv(pkt);
+      }
     }
     // just zero-hop control packets allowed (for this subset of payloads)
     return ACTION_RELEASE;
@@ -103,8 +210,16 @@ DispatcherAction Mesh::onRecvPacket(Packet* pkt) {
         _tables->markSeen(pkt);
         removeSelfFromPath(pkt);
 
+        if (_hop_retries_max) trackHopForward(pkt, 0, d, HOP_RELAYED);
         return ACTION_RETRANSMIT_DELAYED(0, d);  // Routed traffic is HIGHEST priority 
       }
+    }
+    // This node is NOT the next hop (or has already forwarded it), so it does not forward it now. But if the next hop is silent (a repeater
+    // that died, or was replaced and so has a new id) nobody else will either, and the sender's path is stale. Remember the packet: if the next
+    // hop is not heard passing it on, take it over (see serviceHopRetries). Waits long enough for the next hop's own retries first.
+    if (_hop_retries_max && _hop_rescue && !self_id.isHashMatch(pkt->path, pkt->getPathHashSize()) && isHopFallbackType(pkt->getPayloadType())
+        && allowPacketForward(pkt) && !_tables->wasSeen(pkt) && !hopRecentlyHeard(pkt->path, pkt->getPathHashSize())) {
+      trackHopForward(pkt, 1, 0, HOP_OVERHEARD);
     }
     return ACTION_RELEASE;   // this node is NOT the next hop (OR this packet has already been forwarded), so discard.
   }
@@ -618,6 +733,29 @@ Packet* Mesh::createTrace(uint32_t tag, uint32_t auth_code, uint8_t flags) {
   return packet;
 }
 
+void Mesh::answerPing(const Packet* packet, const PingRequest& req, uint8_t node_type, const char* name,
+                      uint8_t fw_ver, PingRateLimiter& limiter) {
+  if (!pingShouldRespond(req, node_type, (uint8_t)_rng->nextInt(0, 256))) return;
+  if (!limiter.allow(_rtc->getCurrentTime())) return;
+
+  PingResponse r;
+  memset(&r, 0, sizeof(r));
+  r.node_type = node_type;
+  r.snr_x4 = packet->_snr;
+  r.tag = req.tag;
+  r.fw_ver = fw_ver;
+  memcpy(r.pubkey_prefix, self_id.pub_key, sizeof(r.pubkey_prefix));
+  if (name) strncpy(r.name, name, PING_MAX_NAME);
+
+  uint8_t buf[PING_RESP_MIN_LEN + PING_MAX_NAME];
+  size_t n = pingEncodeResponse(r, buf);
+  Packet* resp = createControlData(buf, n);
+  if (resp == NULL) return;
+
+  // straight back to whoever asked (they are in range, or we would not have heard them), after a random delay
+  sendZeroHop(resp, pingResponseDelayMs(req, _rng->nextInt(0, 60000)));
+}
+
 Packet* Mesh::createControlData(const uint8_t* data, size_t len) {
   if (len > sizeof(Packet::payload)) return NULL;  // invalid arg
 
@@ -690,6 +828,98 @@ void Mesh::sendFlood(Packet* packet, uint16_t* transport_codes, uint32_t delay_m
   sendPacket(packet, pri, delay_millis);
 }
 
+// Remember an envelope we have just passed on, so we can send it again if the next repeater is not heard passing it along. The next hop's
+// copy has the ttl one lower than ours, and the same identity (the identity leaves the ttl out).
+void Mesh::trackRoutedForward(const Packet* pkt, uint32_t delay_millis) {
+  if (pkt->payload_len < 2 || pkt->payload[1] == 0) return;
+  uint8_t hash[MAX_HASH_SIZE];
+  routedIdentity(pkt->payload, pkt->payload_len, hash);
+  uint8_t raw[MAX_TRANS_UNIT];
+  uint8_t len = pkt->writeTo(raw);
+  _hop_retry.track(hash, pkt->payload[1] - 1, raw, len, 0, _ms->getMillis() + delay_millis + hopWaitMillis(len));
+}
+
+DispatcherAction Mesh::onRoutedPacket(Packet* pkt) {
+  RoutedEnvelope e;
+  if (!routedDecode(pkt->payload, pkt->payload_len, e)) return ACTION_RELEASE;
+
+  if (_hop_retries_max && _hop_retry.count() > 0) {   // is this the next repeater passing along an envelope we sent on?
+    uint8_t h[MAX_HASH_SIZE];
+    routedIdentity(pkt->payload, pkt->payload_len, h);
+    if (_hop_retry.overheard(h, e.ttl)) n_hop_acks++;
+  }
+
+  // only the repeater named as the next hop acts on it
+  if (pkt->getPathHashCount() != 1 || !self_id.isHashMatch(pkt->path, pkt->getPathHashSize())) return ACTION_RELEASE;
+  if (!allowPacketForward(pkt) || _tables->wasSeen(pkt)) return ACTION_RELEASE;
+  _tables->markSeen(pkt);
+
+  RoutedDecision d;
+  if (!routedDecision(e, d)) return ACTION_RELEASE;
+
+  switch (d.action) {
+    case ROUTED_DELIVER: {
+      Packet* inner = obtainNewPacket();
+      if (inner == NULL) return ACTION_RELEASE;
+      if (!inner->readFrom(e.inner, e.inner_len)) {
+        releasePacket(inner);
+        return ACTION_RELEASE;
+      }
+      n_routed_delivered++;
+      sendZeroHop(inner, getDirectRetransmitDelay(inner));   // the destination is one of ours: it hears this repeater directly
+      return ACTION_RELEASE;
+    }
+    case ROUTED_FORWARD: {
+      uint8_t ph = pkt->getPathHashSize();
+      if (ph > ROUTED_MAX_HASH) return ACTION_RELEASE;
+      routedRewrite(pkt->path, ph, pkt->payload, d);   // the next hop, as a path hash of the packet's size; one less ttl
+      n_routed_fwd++;
+      uint32_t delay = getDirectRetransmitDelay(pkt);
+      if (_hop_retries_max && !d.next_is_dest) trackRoutedForward(pkt, delay);   // the destination's home does not pass it on: nothing to hear
+      return ACTION_RETRANSMIT_DELAYED(0, delay);   // routed traffic goes first
+    }
+    default:
+      n_routed_dropped++;
+      return ACTION_RELEASE;
+  }
+}
+
+bool Mesh::canSendRouted(uint8_t* hash, uint8_t& hsize) {
+  uint32_t now = nowSeconds();
+  return _entry.get(hash, hsize, now) && _routing_seen.seen(hash, hsize, now);
+}
+
+bool Mesh::sendRouted(Packet* inner, const uint8_t* dest_home, uint8_t dest_hsize, uint32_t delay_millis) {
+  uint8_t entry[ROUTED_MAX_HASH];
+  uint8_t es;
+  if (!canSendRouted(entry, es) || dest_hsize < 1) return false;
+  uint8_t h = es < dest_hsize ? es : dest_hsize;   // the envelope names both homes with the same number of bytes
+
+  inner->header &= ~PH_ROUTE_MASK;
+  inner->header |= ROUTE_TYPE_DIRECT;
+  inner->path_len = 0;
+  uint8_t raw[MAX_TRANS_UNIT];
+  uint8_t raw_len = inner->writeTo(raw);
+
+  uint8_t body[MAX_PACKET_PAYLOAD];
+  int n = routedEncode(body, h, ROUTED_DEFAULT_TTL, dest_home, entry, raw, raw_len);
+  if (n == 0) return false;                         // too big to wrap: the caller sends it the usual way
+
+  Packet* outer = obtainNewPacket();
+  if (outer == NULL) return false;
+  outer->header = ROUTE_TYPE_DIRECT | (PAYLOAD_TYPE_ROUTED << PH_TYPE_SHIFT);
+  outer->path_len = ((es - 1) << 6) | 1;           // one hash of es bytes: the nearest repeater
+  memcpy(outer->path, entry, es);
+  memcpy(outer->payload, body, n);
+  outer->payload_len = n;
+
+  releasePacket(inner);
+  _tables->markSeen(outer);
+  n_routed_sent++;
+  sendPacket(outer, 0, delay_millis);
+  return true;
+}
+
 void Mesh::sendDirect(Packet* packet, const uint8_t* path, uint8_t path_len, uint32_t delay_millis) {
   packet->header &= ~PH_ROUTE_MASK;
   packet->header |= ROUTE_TYPE_DIRECT;
@@ -711,6 +941,7 @@ void Mesh::sendDirect(Packet* packet, const uint8_t* path, uint8_t path_len, uin
     }
   }
   _tables->markSeen(packet); // mark this packet as already sent in case it is rebroadcast back to us
+  if (_hop_retries_max && packet->getPayloadType() != PAYLOAD_TYPE_TRACE) trackHopForward(packet, pri, delay_millis);
   sendPacket(packet, pri, delay_millis);
 }
 

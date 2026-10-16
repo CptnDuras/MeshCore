@@ -129,6 +129,8 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   int handleRequest(ClientInfo* sender, uint32_t sender_timestamp, uint8_t* payload, size_t payload_len);
 
 protected:
+  mesh::PingRateLimiter ping_limiter;   // how often this node answers pings
+  void onPingRecv(mesh::Packet* packet, const mesh::PingRequest& req) override;
   float getAirtimeBudgetFactor() const override {
     return _prefs.airtime_factor;
   }

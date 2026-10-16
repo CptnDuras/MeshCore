@@ -122,6 +122,89 @@ This document provides an overview of CLI commands that can be sent to MeshCore 
 
 ---
 
+### Which optional features are on, and what they have done (repeater only)
+
+**Usage:** `features`
+
+All of these features are in every build and are switched at runtime, with the settings below. The reply is one line, for example
+`hop-retry:2 (resent 5, heard 118) fallback:on (flooded 1) rescue:on (2) route-cache:12/32 ping:on route:on (neighbours 3, clients 2, routes 9)`. `resent` is how
+many unicast packets were sent again because the next repeater was not heard passing them on; `next hop heard` is how many times it
+was. `flooded` is how many relayed packets were flooded because the next repeater never answered (`hop.fallback`), and `rescue` how many overheard packets were taken over (`hop.rescue`). `off` means the feature is switched off.
+
+---
+
+### Optional features: settings (repeater only)
+
+Saved with the other settings; they take effect at once.
+
+- `get hop.retries` / `set hop.retries <0-3>`: after sending a unicast packet to the next repeater, listen for it being passed on and
+  send it again up to this many times if it is not heard. 0 = off. Default 2.
+- `get hop.fallback` / `set hop.fallback <on|off>`: when the retries run out (the next repeater on the packet's path is gone, for
+  example a repeater that died and was replaced, so its id is new), flood the packet from here instead of dropping it. It applies
+  only to packets this repeater was passing on for someone else, never its own, and only to messages, requests, replies, acks and
+  path returns. The flood starts with this repeater's hash in its path, so the far end's path return gives the sender a route it can
+  use, replacing its stale cached one. A scoped packet stays in its scope; an unscoped one floods unscoped, so a network that blocks
+  unscoped floods drops it. Needs `hop.retries` above 0. Default on.
+- `get hop.rescue` / `set hop.rescue <on|off>`: also act on a unicast packet this repeater only *overheard*, that is addressed to another
+  repeater as the next hop. If that repeater is not heard passing it on within about twice its normal time (plus a random stagger, so
+  usually only one of several listeners acts), flood it from here, the same way as `hop.fallback`. This covers the first hop: a client
+  whose cached path starts at a repeater that has died is still heard by the repeaters around it. Not done for a next hop heard in the
+  last 10 minutes (needs route tables to know) or when a flood of the same packet has already been heard. Needs `hop.retries` above 0.
+  Default on.
+- `get routecache` / `set routecache <on|off>`: remember the path each verified advert took (the `routes` command). Default on.
+- `get ping` / `set ping <on|off>`: answer zero-hop pings from clients. Default on.
+
+---
+
+### Routes learned from adverts (repeater only)
+
+The repeater records the path every verified advert took to reach it (while `routecache` is on). This is observation only: nothing
+forwards using it.
+
+**Usage:**
+- `routes` (nodes, newest first, as `id:hops:seconds_ago:snr`; the reply holds only what fits)
+- `routes <hex id>` (the whole path to one node, at least 2 bytes of its public key)
+- `routes clear`
+
+---
+
+### Route tables and route adverts (repeater only, off by default)
+
+A repeater with `route.enable on` keeps a table of the repeaters and checked-in clients it has heard about, sends zero-hop route
+adverts to its neighbours, and listens to theirs. With it off nothing is created and nothing is sent.
+
+The table is used for **routed forwarding**: a client that knows its nearest repeater, and the destination's home repeater, sends its
+message as a `ROUTED` envelope (payload type 0x0C) addressed to the home repeater. Each repeater with route tables on looks the home
+repeater up and passes the envelope to the next hop, with the same per-hop retransmission as other unicast packets; the home repeater
+unwraps it and sends the inner packet zero-hop to the destination. A client sends envelopes only when it has heard its nearest repeater
+send route adverts (which shows that repeater understands them), and tries them only when it has no cached path, for the first two
+attempts of a message, before flooding (cached path, then routed, then flood). Repeaters without route tables, or with `disable_fwd`,
+drop envelopes and the sender falls back to flooding. `features` shows `routed:fwd N dlv N drop N`.
+
+**Route stability.** With the plain distance-vector rules a newer sequence number from any neighbour replaces the route, however much
+worse. Adverts spread one hop per period, so which neighbour's copy is newest is timing, not quality, and in a mesh with parallel paths
+the next hop flips back and forth and every flip is announced. `route.margin` and `route.delta` stop that.
+
+**Settings** (`get route.<name>` / `set route.<name> <value>`; `get route` shows them all):
+- `route.enable <on|off>`: default off
+- `route.id_bytes <2|3|4>`: bytes of a public key used to name a node; every repeater and client on the network must agree. Default 4
+- `route.full_period <0|1800-28800>`: seconds between whole-table adverts, 30 minutes to 8 hours. 0 = use lifetimes instead. Default 14400 (4 hours); a repeater whose saved settings already hold another value keeps it until you set this
+- `route.life <600-32640>`: with `full_period 0`, how long this repeater's own entry is believed. Default 7200
+- `route.refresh <10-95>`: with `full_period 0`, refresh an entry when this percent of its lifetime is left. Default 67
+- `route.min_gap <10-600>`: at most one advert per this many seconds. Default 60
+- `route.repeats <1-3>`: times a change is sent unless a neighbour is heard passing it on. Default 2
+- `route.margin <0-20>`: keep the current next hop unless another neighbour is cheaper by at least this much; the current next hop's own news is always believed, and a route lapses when it stops being refreshed. Default 3. 0 = a newer sequence number always wins
+- `route.delta <0-20>`: do not announce a cost change smaller than this (the table still takes it; the next full table carries it). Default 3. 0 or 1 = announce every change
+
+Changing a setting other than `route.enable`, `route.margin` or `route.delta` restarts the route tables (they refill as adverts arrive). `route.margin` and `route.delta` take effect at once.
+
+**Views:**
+- `route`: the table, 4-5 lines at a time as `dest>next hop:cost:seconds left`; `route <offset>` for the next page
+- `route stats`: counters (adverts and entries in and out, how many were new, changed, ignored)
+- `attached`: the clients that have checked in here, as `id:seconds left:cost:SNR`; `attached <offset>` for more
+
+---
+
 ### Discover zero hop neighbors
 
 **Usage:** 
@@ -211,7 +294,7 @@ This document provides an overview of CLI commands that can be sent to MeshCore 
 
 **Set by build flag:** `LORA_FREQ`, `LORA_BW`, `LORA_SF`, `LORA_CR`
 
-**Default:** `869.618,62.5,8,5`
+**Default:** `910.525,62.5,7,5` in this build (the US preset). Upstream's default is `869.618,62.5,8,5`. Only a fresh or erased node starts from the default; a node with saved settings keeps them.
 
 **Note:** Requires reboot to apply
 

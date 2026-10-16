@@ -829,6 +829,17 @@ void MyMesh::onControlDataRecv(mesh::Packet *packet) {
   if (_listener) _listener->onControlDataRecv(packet);
 }
 
+// Someone pinged the mesh. A client answers only if its owner switched that on: being listed is a choice.
+void MyMesh::onPingRecv(mesh::Packet *packet, const mesh::PingRequest &req) {
+  if (!_prefs.ping_visible) return;
+  answerPing(packet, req, ADV_TYPE_CHAT, _prefs.node_name, FIRMWARE_VER_CODE, ping_limiter);
+}
+
+// An answer to a ping we sent: hand it to the app in the same frame format as other control data.
+void MyMesh::onPingRespRecv(mesh::Packet *packet, const mesh::PingResponse &resp) {
+  onControlDataRecv(packet);
+}
+
 void MyMesh::onRawDataRecv(mesh::Packet *packet) {
   if (packet->payload_len + 4 > sizeof(out_frame)) {
     MESH_DEBUG_PRINTLN("onRawDataRecv(), payload_len too long: %d", packet->payload_len);
@@ -1072,6 +1083,7 @@ void MyMesh::handleCmdFrame(size_t len) {
     i += 20;
     out_frame[i++] = _prefs.isRepeatEn() ? 1 : 0;   // v9+
     out_frame[i++] = _prefs.path_hash_mode;  // v10+
+    out_frame[i++] = _prefs.ping_visible;    // present only on firmware that supports PING: answers pings when 1
     _serial->writeFrame(out_frame, i);
   } else if (cmd_frame[0] == CMD_APP_START &&
              len >= 8) { // sent when app establishes connection, respond with node ID
@@ -1496,6 +1508,9 @@ void MyMesh::handleCmdFrame(size_t len) {
         _prefs.advert_loc_policy = cmd_frame[3];
         if (len >= 5) {
           _prefs.multi_acks = cmd_frame[4];
+          if (len >= 6) {
+            _prefs.ping_visible = cmd_frame[5] ? 1 : 0;   // show up when the mesh is pinged
+          }
         }
       }
     }
