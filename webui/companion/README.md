@@ -15,7 +15,9 @@ The web UI runs next to TCP port 5000 and BLE, it does not replace them.
 
 ## Turn it on
 
-1. Build an env with `-D WITH_WEBUI` and `ENABLE_WIFI_INTERFACE` (example: `Heltec_v3_companion_radio_wifi_web`).
+1. Build an env with `-D WITH_WEBUI` and `ENABLE_WIFI_INTERFACE`. Ready-made: `Heltec_v3_companion_radio_wifi_web`,
+   `heltec_v4_companion_radio_wifi_web`, `heltec_v4_tft_companion_radio_wifi_web`,
+   `heltec_v4_r8_companion_radio_wifi_web`, `heltec_v4_r8_tft_companion_radio_wifi_web`.
 2. Give the node WiFi (from the phone app console, USB serial, or build flags):
    `set wifi.ssid <name>`, `set wifi.pwd <password>`, reboot.
 3. Set the web password: `set web.pwd <8 to 32 characters>`, reboot. The user name is `admin`.
@@ -43,7 +45,12 @@ With no password set the web server is never started.
 - Not yet tested on hardware: digest authentication of the WebSocket upgrade in real browsers, and heap use with
   WiFi, TCP and the web server together under load.
 
-## Cost (Heltec V3, ESP32-S3)
+## Cost
+
+Heltec V4 (all four web envs build): about +84 KB flash over the stock WiFi env (1,107,393 to 1,191,657 bytes on the OLED
+env, 18.2 % of the 6.5 MB app partition) and +3.7 KB RAM. Built only, not run on a V4 board.
+
+Heltec V3, ESP32-S3:
 
 Stock `Heltec_v3_companion_radio_wifi`: 1,109,065 bytes flash, 174,704 bytes RAM. With the web UI: 1,193,417 bytes flash
 (+84 KB, 35.7 % of the app partition), 178,420 bytes RAM (+3.7 KB static). The page is 23.9 KB, 8.4 KB gzipped.
