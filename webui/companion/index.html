@@ -90,15 +90,16 @@ function load() { try { var d = JSON.parse(localStorage.getItem(skey()) || '{}')
 function save() { try { var c = {}; for (var k in S.convs) c[k] = S.convs[k].slice(-100); localStorage.setItem(skey(), JSON.stringify({ convs: c, unread: S.unread })); } catch (e) { } }
 
 // ---- request/response over the socket (the protocol is one command, one answer, plus pushes) ----
-function req(frame, accept) {
-  return new Promise(function (res, rej) { queue.push({ frame: frame, accept: accept, res: res, rej: rej }); pump(); });
+function req(frame, accept, ms) {
+  return new Promise(function (res, rej) { queue.push({ frame: frame, accept: accept, res: res, rej: rej, ms: ms || 8000 }); pump(); });
 }
 function pump() {
   if (cur || !queue.length || !ws || ws.readyState !== 1) return;
   cur = queue.shift();
-  cur.timer = setTimeout(function () { done(null, 'timeout'); }, 8000);
+  arm();
   ws.send(cur.frame);
 }
+function arm() { clearTimeout(cur.timer); cur.timer = setTimeout(function () { done(null, 'timeout'); }, cur.ms); }
 function done(m, err) {
   if (!cur) return;
   clearTimeout(cur.timer); var c = cur; cur = null;
@@ -106,6 +107,7 @@ function done(m, err) {
   pump();
 }
 function onFrame(m) {
+  if (cur) arm();
   if (cur && m.t === 'err') return done(null, 'error ' + m.code);
   if (cur && cur.accept.indexOf(m.t) >= 0) return done(m);
   push(m);
@@ -130,15 +132,16 @@ async function init() {
   S.self = await req(MC.enc.appStart('web'), ['self']);
   load(); $('title').textContent = S.self.name || 'MeshCore Node';
   await syncClock(false);
-  S.contacts = {}; await loadContacts();
   S.channels = {};
-  for (var i = 0; i < S.dev.maxChannels; i++) {
-    try { var c = await req(MC.enc.getChannel(i), ['channel']); if (c.name) S.channels[i] = c; } catch (e) { break; }
+  for (var i = 0; i < S.dev.maxChannels; i++) {   // channels first: the contact list can be long; an empty or unreadable slot is skipped
+    try { var c = await req(MC.enc.getChannel(i), ['channel']); if (c.name) S.channels[i] = c; } catch (e) { }
   }
+  renderList();
+  S.contacts = {}; try { await loadContacts(); } catch (e) { }
   setStatus(true); renderNode(); renderList(); battery(); syncAll();
 }
 async function loadContacts() {
-  await req(MC.enc.getContacts(0), ['contactsEnd']);
+  await req(MC.enc.getContacts(0), ['contactsEnd'], 30000);
   renderList();
 }
 async function syncClock(force) {
