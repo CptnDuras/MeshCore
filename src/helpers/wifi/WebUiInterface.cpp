@@ -38,8 +38,14 @@ static const char SETUP_PAGE[] PROGMEM =
   "<label>Web page password</label><input name=webpw minlength=8 maxlength=32 type=password required autocomplete=off>"
   "<small>8 to 32 characters.</small><br><button>Save and reboot</button></form></body></html>";
 
+// AsyncTCP asserts if the server starts before the network stack exists, which is the case until WiFi has a mode
+static void ensureNetworkStack() {
+  if (WiFi.getMode() == WIFI_MODE_NULL) WiFi.mode(WIFI_AP);
+}
+
 void WebUiInterface::beginSetup(uint16_t port, WebUiSetupSaveFn onSave) {
   _onSave = onSave;
+  ensureNetworkStack();
   _mux = xSemaphoreCreateMutex();
   _server = new AsyncWebServer(port);
   addOriginCheck();
@@ -78,6 +84,7 @@ void WebUiInterface::startAccessPoint(bool keepStation) {
 void WebUiInterface::begin(uint16_t port, const char* user, const char* password) {
   if (!password || !password[0]) return;   // no password, no web UI
 
+  ensureNetworkStack();
   _mux = xSemaphoreCreateMutex();
   _server = new AsyncWebServer(port);
   _ws = new AsyncWebSocket("/ws");
