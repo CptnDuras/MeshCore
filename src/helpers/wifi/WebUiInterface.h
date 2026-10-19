@@ -36,6 +36,19 @@ class AsyncAuthenticationMiddleware;
   #define WEBUI_USER "admin"
 #endif
 
+// Called on the Arduino loop task with the values entered in the setup form (already validated).
+typedef void (*WebUiSetupSaveFn)(const char* ssid, const char* wifiPwd, const char* webPwd);
+
+#ifndef WEBUI_AP_PASSWORD
+  #define WEBUI_AP_PASSWORD "meshnode"   // WPA2 key of the setup access point (printed in the docs)
+#endif
+#ifndef WEBUI_RECOVERY_AP_MS
+  #define WEBUI_RECOVERY_AP_MS 90000UL   // station never connected this long after boot: raise the access point
+#endif
+#ifndef WEBUI_AP_MAX_MS
+  #define WEBUI_AP_MAX_MS (15UL * 60UL * 1000UL)
+#endif
+
 class WebUiInterface : public BaseSerialInterface {
   struct Frame {
     uint8_t len;
@@ -56,12 +69,28 @@ class WebUiInterface : public BaseSerialInterface {
   Frame _send[SEND_QUEUE_SIZE];
   int _send_len = 0;
 
+  // access point and first-boot setup form
+  bool _apOn = false;
+  bool _apKeepsStation = false;
+  unsigned long _apStart = 0;
+  WebUiSetupSaveFn _onSave = nullptr;
+  bool _savePending = false;
+  char _pSsid[33], _pWifiPwd[64], _pWebPwd[33];
+
   static bool sameOrigin(const char* origin, const char* host);
+  void addOriginCheck();
   void onEvent(AsyncWebSocketClient* client, int type, void* arg, uint8_t* data, size_t len);
 
 public:
   // Starts the HTTP server. Does nothing if the password is empty (the UI stays off).
   void begin(uint16_t port, const char* user, const char* password);
+
+  // First-boot setup: no web password yet, so serve only a form (WiFi name, WiFi password, web password) on the
+  // access point. Open to anyone in radio range until saved or WEBUI_AP_MAX_MS passes, then the AP shuts off.
+  void beginSetup(uint16_t port, WebUiSetupSaveFn onSave);
+  // Raises "MeshNode-XXXX". keepStation: leave the station connection attempts running (recovery mode).
+  void startAccessPoint(bool keepStation);
+  bool accessPointOn() const { return _apOn; }
 
   void enable() override;
   void disable() override;

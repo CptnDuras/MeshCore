@@ -136,6 +136,19 @@ void halt() {
   bool wifi_enabled = false;   // set at boot from prefs; false also when the effective SSID is blank
 #endif
 
+#if defined(WITH_WEBUI) && defined(ENABLE_WIFI_INTERFACE)
+static unsigned long web_reboot_at = 0;   // after the setup form saved: reboot once the reply has gone out
+static void web_setup_saved(const char* ssid, const char* wifiPwd, const char* webPwd) {
+  NodePrefs* p = the_mesh.getNodePrefs();
+  StrHelper::strncpy(p->wifi_ssid, ssid, sizeof(p->wifi_ssid));
+  StrHelper::strncpy(p->wifi_pwd, wifiPwd, sizeof(p->wifi_pwd));
+  StrHelper::strncpy(p->web_pwd, webPwd, sizeof(p->web_pwd));
+  p->wifi_enabled = 1;
+  the_mesh.savePrefs();
+  web_reboot_at = millis() + 2000;
+}
+#endif
+
 void setup() {
   Serial.begin(115200);
   board.begin();
@@ -253,15 +266,21 @@ void setup() {
 #endif
     wifi_interface.begin(TCP_PORT);
     interface_manager.addInterface(InterfaceType::WiFi, &wifi_interface);
-#ifdef WITH_WEBUI
-    if (the_mesh.getNodePrefs()->web_pwd[0]) {   // the web UI stays off until a password is set
-      web_interface.begin(WEBUI_PORT, WEBUI_USER, the_mesh.getNodePrefs()->web_pwd);
-      interface_manager.addInterface(InterfaceType::Web, &web_interface);
-    }
-#endif
   } else {
     WIFI_DEBUG_PRINTLN("wifi disabled");
   }
+#ifdef WITH_WEBUI
+  if (wifi_enabled) {
+    if (the_mesh.getNodePrefs()->web_pwd[0]) {
+      web_interface.begin(WEBUI_PORT, WEBUI_USER, the_mesh.getNodePrefs()->web_pwd);
+    } else {
+      // not configured yet: an access point with a setup form (WiFi name and password, web password)
+      web_interface.beginSetup(WEBUI_PORT, web_setup_saved);
+      web_interface.startAccessPoint(wifi_ssid[0] != 0);
+    }
+    interface_manager.addInterface(InterfaceType::Web, &web_interface);
+  }
+#endif
 #endif
 
 // add usb interface
@@ -318,6 +337,15 @@ void loop() {
 #endif
   }
 
+#if defined(WITH_WEBUI) && defined(ENABLE_WIFI_INTERFACE)
+  if (web_reboot_at && millis() > web_reboot_at) board.reboot();
+  // web page set up but the home WiFi never came up (wrong password, moved house): raise the access point so the
+  // page, which is reachable at 192.168.4.1 with the web password, can fix the WiFi settings through its console
+  if (wifi_enabled && the_mesh.getNodePrefs()->web_pwd[0] && !web_interface.accessPointOn() &&
+      millis() > WEBUI_RECOVERY_AP_MS && WiFi.status() != WL_CONNECTED) {
+    web_interface.startAccessPoint(true);
+  }
+#endif
 #ifdef ENABLE_WIFI_INTERFACE
   if (wifi_enabled) {
     // RP2040 has no WiFi event callbacks, so poll the link state instead
