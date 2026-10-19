@@ -3,8 +3,8 @@
 #include "BaseSerialInterface.h"
 
 #ifndef MAX_INTERFACES
-  // ble, usb, wifi, ethernet
-  #define MAX_INTERFACES 4
+  // ble, usb, wifi, ethernet, web ui
+  #define MAX_INTERFACES 5
 #endif
 
 enum class InterfaceType : uint8_t {
@@ -13,7 +13,8 @@ enum class InterfaceType : uint8_t {
   USB,
   WiFi,
   Ethernet,
-  HardwareSerial
+  HardwareSerial,
+  Web
 };
 
 class MultiSerialInterface : public BaseSerialInterface {

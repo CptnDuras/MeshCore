@@ -59,6 +59,10 @@ MultiSerialInterface interface_manager;
   #if defined(ESP32) || defined(RP2040_PLATFORM)
     #include <helpers/wifi/SerialWifiInterface.h>
     SerialWifiInterface wifi_interface;
+    #ifdef WITH_WEBUI
+      #include <helpers/wifi/WebUiInterface.h>
+      WebUiInterface web_interface;
+    #endif
   #else
     #error "SerialWifiInterface is not defined for this platform"
   #endif
@@ -249,6 +253,12 @@ void setup() {
 #endif
     wifi_interface.begin(TCP_PORT);
     interface_manager.addInterface(InterfaceType::WiFi, &wifi_interface);
+#ifdef WITH_WEBUI
+    if (the_mesh.getNodePrefs()->web_pwd[0]) {   // the web UI stays off until a password is set
+      web_interface.begin(WEBUI_PORT, WEBUI_USER, the_mesh.getNodePrefs()->web_pwd);
+      interface_manager.addInterface(InterfaceType::Web, &web_interface);
+    }
+#endif
   } else {
     WIFI_DEBUG_PRINTLN("wifi disabled");
   }

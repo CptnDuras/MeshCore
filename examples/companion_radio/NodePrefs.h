@@ -56,6 +56,7 @@ public:
   char wifi_ssid[33] = {0};   // if empty, the compile-time WIFI_SSID is used
   char wifi_pwd[64] = {0};
   uint8_t wifi_enabled = 1; // enabled by default to allow wifi only builds to work. wifi won't be started if ssid is empty
+  char web_pwd[33] = {0};   // web UI password (WITH_WEBUI builds); empty = web UI off. Stored in the keyed wifi section, so the legacy binary layout is untouched
   // use ssid from prefs, or fallback to ssid from build flags
   const char* getWifiSSID() const { return wifi_ssid[0] ? wifi_ssid : WIFI_SSID; }
 #endif
@@ -184,6 +185,7 @@ private:
       def("ssid", _parent->wifi_ssid, sizeof(_parent->wifi_ssid));
       def("pwd", _parent->wifi_pwd, sizeof(_parent->wifi_pwd));
       def("enabled", _parent->wifi_enabled);
+      def("webpwd", _parent->web_pwd, sizeof(_parent->web_pwd));
     }
   public:
     WiFiPrefs(NodePrefs* parent) : _parent(parent) { }

@@ -3,6 +3,9 @@
 #include <Arduino.h> // needed for PlatformIO
 #ifdef ENABLE_WIFI_INTERFACE
 #include <WiFi.h>
+#ifdef WITH_WEBUI
+#include <helpers/wifi/WebUiInterface.h>   // WEBUI_PORT
+#endif
 #endif
 #include <Mesh.h>
 
@@ -2194,6 +2197,35 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp, char*
     }
     return true;
   }
+#ifdef WITH_WEBUI
+  if (memcmp(command, "set web.pwd ", 12) == 0) {
+    const char* pw = &command[12];
+    if (strlen(pw) < 8 || strlen(pw) >= sizeof(_prefs.web_pwd)) {
+      strcpy(reply, "Error, password must be 8 to 32 characters");
+    } else {
+      StrHelper::strncpy(_prefs.web_pwd, pw, sizeof(_prefs.web_pwd));
+      savePrefs();
+      strcpy(reply, "> web.pwd set, user is admin (reboot to apply)");
+    }
+    return true;
+  }
+  if (strcmp(command, "set web.off") == 0) {
+    _prefs.web_pwd[0] = 0;
+    savePrefs();
+    strcpy(reply, "> web UI off (reboot to apply)");
+    return true;
+  }
+  if (strcmp(command, "get web.status") == 0) {
+    if (!_prefs.web_pwd[0]) {
+      strcpy(reply, "> off (set web.pwd to enable)");
+    } else if (WiFi.status() == WL_CONNECTED) {
+      sprintf(reply, "> on, http://%s:%d/ user admin", WiFi.localIP().toString().c_str(), WEBUI_PORT);
+    } else {
+      strcpy(reply, "> on, waiting for wifi");
+    }
+    return true;
+  }
+#endif
 #endif
 
   if (strcmp(command, "board") == 0) {

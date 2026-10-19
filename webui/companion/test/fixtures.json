@@ -1,0 +1,168 @@
+[
+ {
+  "name": "self_info",
+  "hex": "050114140a81f2e32d9c3153160e8a429424715f6bc2ca501cb542ad26dcac8652461cfd00000000000000000000000095440d0090d003000b053041383146324533",
+  "expect": {
+   "t": "self",
+   "key": "0a81f2e32d9c3153160e8a429424715f6bc2ca501cb542ad26dcac8652461cfd",
+   "advType": 1,
+   "name": "0A81F2E3",
+   "sf": 11,
+   "cr": 5,
+   "freqKHz": 869.525,
+   "bwKHz": 250.0
+  }
+ },
+ {
+  "name": "device_info",
+  "hex": "0d0d3208000000003134204175672032303236006d6573686e6f64652d686f737400000000000000000000000000000000000000000000000000000076312e31372e31000000000000000000000000000000",
+  "expect": {
+   "t": "device",
+   "fwVer": 13,
+   "maxChannels": 8,
+   "maxContacts": 100
+  }
+ },
+ {
+  "name": "contacts_start",
+  "hex": "0201000000",
+  "expect": {
+   "t": "contactsStart",
+   "count": 1
+  }
+ },
+ {
+  "name": "contact",
+  "hex": "03e326758cf7d45d1e937853b3c90c10b63c84df9e09528c3683b29f9964da04470100ff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000426f62000000000000000000000000000000000000000000000000000000000032f15365e0d3110330edecff64f15365",
+  "expect": {
+   "t": "contact",
+   "key": "e326758cf7d45d1e937853b3c90c10b63c84df9e09528c3683b29f9964da0447",
+   "type": 1,
+   "pathLen": 255,
+   "name": "Bob",
+   "lastAdvert": 1700000050,
+   "lat": 51.5,
+   "lon": -1.25
+  }
+ },
+ {
+  "name": "contacts_end",
+  "hex": "0464f15365",
+  "expect": {
+   "t": "contactsEnd",
+   "lastMod": 1700000100
+  }
+ },
+ {
+  "name": "push_msg_waiting",
+  "hex": "83",
+  "expect": {
+   "t": "msgWaiting"
+  }
+ },
+ {
+  "name": "msg_v3",
+  "hex": "10160000e326758cf7d4020069f1536568656c6c6f206d657368",
+  "expect": {
+   "t": "msg",
+   "channel": false,
+   "snr": 5.5,
+   "kind": 0,
+   "ts": 1700000105,
+   "text": "hello mesh",
+   "pathLen": 2,
+   "from": "e326758cf7d4"
+  }
+ },
+ {
+  "name": "no_more_messages",
+  "hex": "0a",
+  "expect": {
+   "t": "noMore"
+  }
+ },
+ {
+  "name": "channel_info",
+  "hex": "120148696b65727320c3a90069f1536568656c6c6f206d657368719f9964da044701000102030405060708090a0b0c0d0e0f",
+  "expect": {
+   "t": "channel",
+   "idx": 1,
+   "name": "Hikers \u00e9",
+   "secret": "000102030405060708090a0b0c0d0e0f"
+  }
+ },
+ {
+  "name": "channel_msg_v3",
+  "hex": "111600000101006af15365426f623a20796f20e29883",
+  "expect": {
+   "t": "msg",
+   "channel": true,
+   "idx": 1,
+   "kind": 0,
+   "ts": 1700000106,
+   "text": "Bob: yo \u2603",
+   "snr": 5.5
+  }
+ },
+ {
+  "name": "battery",
+  "hex": "0cac0f0000000000040000",
+  "expect": {
+   "t": "battery",
+   "mv": 4012,
+   "usedKb": 0,
+   "totalKb": 1024
+  }
+ },
+ {
+  "name": "time",
+  "hex": "0967f15365",
+  "expect": {
+   "t": "time",
+   "secs": 1700000103
+  }
+ },
+ {
+  "name": "sent",
+  "hex": "0601b6322966341d0000",
+  "expect": {
+   "t": "sent",
+   "flood": true,
+   "ack": 1713975990,
+   "timeoutMs": 7476
+  }
+ },
+ {
+  "name": "delivered",
+  "hex": "82b6322966c8000000",
+  "expect": {
+   "t": "delivered",
+   "ack": 1713975990,
+   "tripMs": 200
+  }
+ },
+ {
+  "name": "cli_reply_from_source",
+  "hex": "1d3e20416c696365",
+  "expect": {
+   "t": "cli",
+   "text": "> Alice"
+  }
+ },
+ {
+  "name": "error_frame",
+  "hex": "0101",
+  "expect": {
+   "t": "err",
+   "code": 1
+  }
+ },
+ {
+  "name": "push_advert",
+  "hex": "80c050c5637a44fa8629fff3cccce2300cb362a63d99d95fc54145266f4332445a",
+  "expect": {
+   "t": "advert",
+   "key": "c050c5637a44fa8629fff3cccce2300cb362a63d99d95fc54145266f4332445a"
+  }
+ }
+]
