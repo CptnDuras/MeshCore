@@ -18,7 +18,7 @@ The web UI runs next to TCP port 5000 and BLE, it does not replace them.
 1. Build an env with `-D WITH_WEBUI` and `ENABLE_WIFI_INTERFACE`. Ready-made: `Heltec_v3_companion_radio_wifi_web`,
    `heltec_v4_companion_radio_wifi_web`, `heltec_v4_tft_companion_radio_wifi_web`,
    `heltec_v4_r8_companion_radio_wifi_web`, `heltec_v4_r8_tft_companion_radio_wifi_web`.
-2. Give the node WiFi (from the phone app console, USB serial, or build flags):
+2. Give the node WiFi (from the phone app console, a terminal on the USB serial port at 115200 baud, or build flags):
    `set wifi.ssid <name>`, `set wifi.pwd <password>`, reboot.
 3. Set the web password: `set web.pwd <8 to 32 characters>`, reboot. The user name is `admin`.
 4. `get web.status` prints the address. `set web.off` turns it off again.

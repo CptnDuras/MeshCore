@@ -2466,9 +2466,10 @@ void MyMesh::loop() {
     checkCLIRescueCmd();
   } else {
     checkSerialInterface();
-#if defined(ENABLE_WIFI_INTERFACE) && defined(RP2040_PLATFORM) && !defined(ENABLE_USB_INTERFACE)
+#if defined(ENABLE_WIFI_INTERFACE) && (defined(RP2040_PLATFORM) || defined(WITH_WEBUI)) && !defined(ENABLE_USB_INTERFACE)
     // RP2040 WiFi builds are headless and have no way into the rescue CLI (that needs a
-    // display + long-press), so serve config commands on the otherwise unused USB serial
+    // display + long-press), so serve config commands on the otherwise unused USB serial.
+    // Web page builds do the same so the WiFi and web password can be set from a terminal.
     checkCLIRescueCmd();
 #endif
   }
