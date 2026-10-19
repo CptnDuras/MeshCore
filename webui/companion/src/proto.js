@@ -108,6 +108,7 @@
     getDefaultScope: function () { return Uint8Array.of(CMD.GET_DEFAULT_SCOPE); },
     selfTelemetry: function () { return Uint8Array.of(CMD.TELEMETRY_REQ, 0, 0, 0); },
 
+    getContactByKey: function (keyHex) { return frame(30, [unhex(keyHex)]); },
     removeContact: function (keyHex) { return frame(CMD.REMOVE_CONTACT, [unhex(keyHex)]); },
     resetPath: function (keyHex) { return frame(CMD.RESET_PATH, [unhex(keyHex)]); },
     shareContact: function (keyHex) { return frame(CMD.SHARE_CONTACT, [unhex(keyHex)]); },
