@@ -86,6 +86,13 @@
     return Math.min(site.dbm, p.clientDbm) - (site.cable || 0) + site.gain + p.clientGain - sensitivityDbm(p.sf, p.bwKHz);
   }
 
+  // How far a site can possibly reach, from the signal budget alone: the distance at which free-space loss uses up everything but the margin,
+  // the noise allowance and the clutter. The ground only ever shortens this. Capped at 300 km.
+  function reachKm(site, p) {
+    var allowed = budget(site, p) - (p.noise || 0) - (p.fade || 0) - (p.clutter || 0), d = Math.pow(10, (allowed - 32.45 - 20 * Math.log10(p.fMHz)) / 20);
+    return Math.max(1, Math.min(300, d));
+  }
+
   // The grid the coverage maps are drawn on: square cells of cp DEM pixels covering the whole DEM.
   function makeGrid(dem, cp) { return { z: dem.z, x0: dem.x0, y0: dem.y0, cp: cp, cols: Math.floor(dem.w / cp), rows: Math.floor(dem.h / cp) }; }
   function cellOf(grid, lat, lon) {
@@ -249,7 +256,7 @@
     return result;
   }
 
-  var api = { kOf: kOf, mercX: mercX, mercY: mercY, lonOf: lonOf, latOf: latOf, mPerPx: mPerPx, haversine: haversine, elevPx: elevPx, elevAt: elevAt, terrariumHeight: terrariumHeight,
+  var api = { reachKm: reachKm, kOf: kOf, mercX: mercX, mercY: mercY, lonOf: lonOf, latOf: latOf, mPerPx: mPerPx, haversine: haversine, elevPx: elevPx, elevAt: elevAt, terrariumHeight: terrariumHeight,
     loadDem: loadDem, tileRange: tileRange, sensitivityDbm: sensitivityDbm, fspl: fspl, edgeLoss: edgeLoss, budget: budget, makeGrid: makeGrid, cellOf: cellOf,
     cellCentre: cellCentre, cellKm2: cellKm2, lossMap: lossMap, marginMap: marginMap, linkProfile: linkProfile, linkMargin: linkMargin, candidates: candidates, plan: plan };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Geo = api;

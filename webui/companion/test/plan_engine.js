@@ -45,6 +45,18 @@ ok('sensitivity SF8/62.5 is near -130 dBm', Math.abs(G.sensitivityDbm(8, 62.5) +
   ok('a link over the ridge is blocked and says by how much', !lm.clear && !lm.ok && lm.blockedBy > 100 && Math.abs(lm.blockedKm - 4) < 0.5, [lm.clear, lm.blockedBy, lm.blockedKm]);
   ok('the same link passes in diffraction mode if the budget closes', G.linkMargin(dem, a, b, Object.assign({}, p, { losOnly: false })).ok);
 }
+// a high site sees far past the horizon of a low one: a peak 900 m above a plain reaches 60 km, a mast on the plain does not
+{
+  const z9 = 9, x9 = Math.floor(G.mercX(lon0, z9)) - W / 2, y9 = Math.floor(G.mercY(lat0, z9)) - W / 2, m9 = G.mPerPx(lat0, z9);
+  const dem = { z: z9, x0: x9, y0: y9, w: W, h: W, data: new Float32Array(W * W) };
+  for (let j = 0; j < W; j++) for (let i = 0; i < W; i++) dem.data[j * W + i] = Math.max(0, 900 - Math.hypot(i - W / 2, j - W / 2) * m9 * 0.2);
+  const grid = G.makeGrid(dem, 2), pp = Object.assign({}, p, { rangeM: 80000, fade: 6, losOnly: true }), pt = (km) => G.cellOf(grid, lat0, G.lonOf(G.mercX(lon0, z9) + km * 1000 / m9, z9));
+  const peak = G.marginMap(dem, grid, site, pp);
+  ok('a peak 900 m above the plain reaches 60 km', peak[pt(60)] > 0, peak[pt(60)]);
+  const plain = G.marginMap(dem, grid, Object.assign({}, site, { lon: G.lonOf(G.mercX(lon0, z9) + 40000 / m9, z9) }), pp);
+  ok('a 10 m mast on the plain does not reach 40 km further out', plain[pt(80)] === -Infinity, plain[pt(80)]);
+  ok('reach from the budget is long for a strong link', G.reachKm(site, Object.assign({}, p, { noise: 6, clutter: 6 })) > 50 && G.reachKm(site, p) <= 300);
+}
 // the earth radius factor follows the app: 4/3 at 915 MHz, slightly different elsewhere, within 1.1 to 1.6
 ok('k factor is 4/3 at 915 MHz', Math.abs(G.kOf(915) - 4 / 3) < 1e-9);
 ok('k factor stays within bounds', G.kOf(100) >= 1.1 && G.kOf(5000) <= 1.6);

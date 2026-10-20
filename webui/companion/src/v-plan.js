@@ -6,7 +6,7 @@
 
   var ENV = [['0', 'Open country'], ['6', 'Light trees or houses'], ['12', 'Suburbs'], ['18', 'Dense trees or city']];
   var DEFAULTS = {
-    freq: 910.525, bw: 62.5, sf: 8, repDbm: 22, repGain: 3, repH: 10, cable: 1, cliDbm: 20, cliGain: 0, cliH: 2, env: '6', fade: 10, noise: 6, range: 40, count: 3,
+    freq: 910.525, bw: 62.5, sf: 8, repDbm: 22, repGain: 3, repH: 10, cable: 1, cliDbm: 20, cliGain: 0, cliH: 2, env: '6', fade: 10, noise: 6, reach: 0, count: 3,
     link: true, losOnly: 'true', fresnel: '0'
   };
   var saved = W.store.get('mcw2:plan', null) || {};
@@ -24,7 +24,7 @@
   function asSite(s) { return { lat: s.lat, lon: s.lon, h: +siteH(s), dbm: +P.repDbm, gain: +P.repGain, cable: +P.cable, name: s.name }; }
   function active() { return allSites().filter(function (s) { return !off[s.id]; }); }
   function params() {
-    return { fMHz: +P.freq, sf: +P.sf, bwKHz: +P.bw, clientDbm: +P.cliDbm, clientGain: +P.cliGain, rxH: +P.cliH, clutter: +P.env, fade: +P.fade, noise: +P.noise, rangeM: +P.range * 1000, linkClutter: 0, losOnly: P.losOnly !== 'false', fresnel: +P.fresnel };
+    return { fMHz: +P.freq, sf: +P.sf, bwKHz: +P.bw, clientDbm: +P.cliDbm, clientGain: +P.cliGain, rxH: +P.cliH, clutter: +P.env, fade: +P.fade, noise: +P.noise, rangeM: 0, linkClutter: 0, losOnly: P.losOnly !== 'false', fresnel: +P.fresnel };
   }
   function fmtKm(km) { return W.settings.units === 'imperial' ? (km / 1.609344).toFixed(1) + ' mi' : km.toFixed(1) + ' km'; }
   function fmtArea(km2) { return W.settings.units === 'imperial' ? (km2 / 2.58999).toFixed(0) + ' sq mi' : km2.toFixed(0) + ' km²'; }
@@ -98,7 +98,8 @@
   async function go(count) {
     if (busy) return;
     var sites = active(); if (!count && !sites.length) { UI.toast('Add a site, or wait for repeaters with a position to be heard', 'bad'); return; }
-    var p = params(), rangeDeg = P.range / 111, vb = map.bounds(), bbox;
+    var p = params(), reachKm = +P.reach > 0 ? Math.min(300, +P.reach) : G.reachKm({ dbm: +P.repDbm, gain: +P.repGain, cable: +P.cable }, p), rangeDeg = reachKm / 111, vb = map.bounds(), bbox;
+    p.rangeM = reachKm * 1000;
     var pts = sites.map(function (s) { return { lat: s.lat, lon: s.lon }; });
     if (count) pts.push({ lat: vb.north, lon: vb.west }, { lat: vb.south, lon: vb.east });
     var la = pts.map(function (q) { return q.lat; }), lo = pts.map(function (q) { return q.lon; }), mid = (Math.min.apply(0, la) + Math.max.apply(0, la)) / 2;
@@ -109,18 +110,30 @@
       var live = 0, total = 0; for (var i = 0; i < dem.data.length; i += 997) { total++; if (dem.data[i] === dem.data[i]) live++; }
       if (live < total * 0.5) throw new Error('No terrain data came back. The planner needs the internet for it.');
       var cp = Math.max(1, Math.round(120 / G.mPerPx(mid, dem.z))), grid = G.makeGrid(dem, cp);
-      var res = await G.plan({ dem: dem, grid: grid, p: p, existing: sites.map(asSite), count: count, area: vb, requireLink: P.link,
-        nodes: Object.keys(S.contacts).map(function (k) { return S.contacts[k]; }).filter(function (c) { return c.type !== 2 && (c.lat || c.lon); }),
+      var nodes = Object.keys(S.contacts).map(function (k) { return S.contacts[k]; }).filter(function (c) { return c.type !== 2 && (c.lat || c.lon); });
+      var res = await G.plan({ dem: dem, grid: grid, p: p, existing: sites.map(asSite), count: count, area: vb, requireLink: P.link, nodes: nodes,
         repeater: { h: +P.repH, dbm: +P.repDbm, gain: +P.repGain, cable: +P.cable }, onProgress: function (t, f) { say(t + ' · ' + Math.round(f * 100) + '%'); } });
       run = { grid: grid, dem: dem, margin: res.margin, picks: res.picks, p: p, sites: sites.map(asSite) };
       var cov = 0; for (var k = 0; k < res.covered.length; k++) cov += res.covered[k];
       var res_m = grid.cp * G.mPerPx(mid, dem.z);
       say('Existing repeaters cover about ' + fmtArea(cov * G.cellKm2(grid, mid)) + (count ? '. ' + res.picks.length + ' site' + (res.picks.length === 1 ? '' : 's') + ' suggested.' : '.') +
+        ' Reach used: ' + fmtKm(reachKm) + (+P.reach > 0 ? '' : ' (from the signal budget)') + '.' +
         (res_m > 250 ? ' The area is large, so terrain is sampled every ' + fmtM(res_m) + ' and small hills are missed. Zoom in for detail.' : ''));
-      paint(); markers(); listPicks();
+      paint(); markers(); listPicks(); heardCheck(res.margin, grid, nodes);
       if (count && !res.picks.length) resultsEl.appendChild(el('p', { class: 'dim', text: 'No place in view adds coverage and can reach a repeater. Move the map, lower the signal margin, or turn off "must reach a repeater".' }));
     } catch (e) { say(''); UI.toast(e.message, 'bad'); }
     busy = false;
+  }
+
+  // A check against reality: the people and rooms your node has heard that have a position, and whether the estimate says they are in reach.
+  // Those the estimate misses are where it is too pessimistic (or they were heard through another repeater).
+  function heardCheck(margin, grid, nodes) {
+    var inside = [], outside = [];
+    nodes.forEach(function (n) { var c = G.cellOf(grid, n.lat, n.lon); if (c < 0) return; (margin[c] >= +P.fade ? inside : outside).push(n.name); });
+    if (!inside.length && !outside.length) return;
+    resultsEl.appendChild(el('div', { class: 'card' }, [el('b', { text: 'Against the nodes you have heard' }),
+      el('p', { text: inside.length + ' of ' + (inside.length + outside.length) + ' contacts with a position are inside the estimate.' }),
+      outside.length ? el('p', { class: 'dim', text: 'Outside it: ' + outside.slice(0, 8).join(', ') + (outside.length > 8 ? ' and ' + (outside.length - 8) + ' more' : '') + '. They may have been heard through another repeater, or the estimate is too cautious there.' }) : null]));
   }
 
   function listPicks() {
@@ -319,7 +332,7 @@
           field('Power (dBm)', 'repDbm', { min: 0, max: 30 }), field('Antenna gain (dBi)', 'repGain', { min: -5, max: 20 }), field('Height (m)', 'repH', { min: 1, max: 100 }), field('Cable loss (dB)', 'cable', { min: 0, max: 10 })])]),
         el('div', { class: 'card' }, [el('b', { text: 'Handheld radios and surroundings' }), el('div', { class: 'pgrid' }, [
           field('Power (dBm)', 'cliDbm', { min: 0, max: 30 }), field('Antenna gain (dBi)', 'cliGain', { min: -5, max: 10 }), field('Height (m)', 'cliH', { min: 0.5, max: 20 }),
-          field('Surroundings', 'env', { options: ENV }), field('Range (km)', 'range', { min: 2, max: 300 })])]),
+          field('Surroundings', 'env', { options: ENV }), field('Longest reach (km, 0 = from the signal)', 'reach', { min: 0, max: 300 })])]),
         el('div', { class: 'btnrow' }, [UI.btn('Estimate coverage', { kind: 'primary', onclick: function () { go(0); } }),
           UI.btn('Find sites', { onclick: function () { go(+count.value); } }), el('label', { class: 'pf inline' }, [el('span', { text: 'up to' }), count]),
           UI.btn('Check a link', { onclick: checkLink })]),
