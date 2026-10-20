@@ -39,11 +39,11 @@
   }
   function editRadio() {
     var s = S.self, maxTx = s.maxTxPower || 22, found = -1;
-    PRESETS.forEach(function (p, i) { if (Math.abs(p[1] - s.freqKHz / 1000) < 0.002 && p[2] === s.bwKHz && p[3] === s.sf && p[4] === s.cr) found = i; });
+    PRESETS.forEach(function (p, i) { if (Math.abs(p[1] - s.freqMHz) < 0.002 && p[2] === s.bwKHz && p[3] === s.sf && p[4] === s.cr) found = i; });
     var presetOpts = [{ value: -1, label: found < 0 ? 'Custom' : 'Choose a preset…' }].concat(PRESETS.map(function (p, i) { return { value: i, label: p[0] + ' (' + p[1] + ' MHz)' }; }));
     var fields = [
       { name: 'preset', label: 'Preset', options: presetOpts, value: found },
-      { name: 'freq', label: 'Frequency (MHz)', value: (s.freqKHz / 1000).toFixed(3), validate: function (v) { v = +v; return v >= 150 && v <= 2500 ? '' : 'Frequency is between 150 and 2500 MHz'; } },
+      { name: 'freq', label: 'Frequency (MHz)', value: (s.freqMHz).toFixed(3), validate: function (v) { v = +v; return v >= 150 && v <= 2500 ? '' : 'Frequency is between 150 and 2500 MHz'; } },
       { name: 'bw', label: 'Bandwidth (kHz)', options: BWS.map(function (b) { return { value: b, label: String(b) }; }), value: s.bwKHz },
       { name: 'sf', label: 'Spreading factor', options: [5, 6, 7, 8, 9, 10, 11, 12].map(function (n) { return { value: n, label: 'SF' + n }; }), value: s.sf },
       { name: 'cr', label: 'Coding rate', options: [5, 6, 7, 8].map(function (n) { return { value: n, label: '4/' + n }; }), value: s.cr },
@@ -53,7 +53,7 @@
     UI.form('Radio settings', fields, 'Apply', 'Every node on the mesh must use the same frequency, bandwidth, spreading factor and coding rate to hear each other.').then(function (v) {
       if (!v) return;
       var tx = +v.tx;
-      W.req(MC.enc.setRadio(+v.freq * 1000, +v.bw, +v.sf, +v.cr, S.dev && S.dev.fwVer >= 9 ? v.rep : null), ['ok'])
+      W.req(MC.enc.setRadio(+v.freq, +v.bw, +v.sf, +v.cr, S.dev && S.dev.fwVer >= 9 ? v.rep : null), ['ok'])
         .then(function () { return W.req(MC.enc.setTxPower(tx), ['ok']); })
         .then(function () { UI.toast('Radio settings applied'); return refreshSelf().then(refreshDevice); }, fail);
     });
@@ -150,7 +150,7 @@
         S.vars && S.vars.gps !== undefined ? row('GPS receiver', 'Use the board\'s GPS for the position', toggle(S.vars.gps === '1', function (on) { W.req(MC.enc.setVar('gps', on ? '1' : '0'), ['ok']).then(function () { S.vars.gps = on ? '1' : '0'; }, function (e) { fail(e); render(); }); })) : null
       ]));
       page.appendChild(card('Radio', [
-        row('Radio settings', (s.freqKHz / 1000).toFixed(3) + ' MHz · ' + s.bwKHz + ' kHz · SF' + s.sf + ' · 4/' + s.cr + ' · ' + s.txPower + ' dBm', UI.icon('antenna', 18), editRadio),
+        row('Radio settings', (s.freqMHz).toFixed(3) + ' MHz · ' + s.bwKHz + ' kHz · SF' + s.sf + ' · 4/' + s.cr + ' · ' + s.txPower + ' dBm', UI.icon('antenna', 18), editRadio),
         d ? row('Route detail', 'Bytes of each repeater\'s id kept in a route. More bytes mean fewer mix-ups, shorter maximum routes.', el('select', { class: 'sel', 'aria-label': 'Route detail', onchange: function (e) { setHash(+e.target.value); } },
           [0, 1, 2].map(function (m) { return el('option', { value: m, text: (m + 1) + ' byte' + (m ? 's' : '') + ' per hop', selected: d.pathHashMode === m }); }))) : null
       ]));

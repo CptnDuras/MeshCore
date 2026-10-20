@@ -83,8 +83,8 @@
     setName: function (name) { return frame(CMD.SET_NAME, [clipUtf8(name, NAME_LEN - 1)]); },
     setLatLon: function (lat, lon) { return frame(CMD.SET_LATLON, [sword(Math.round(lat * 1e6)), sword(Math.round(lon * 1e6))]); },
     // freq in kHz, bw in kHz (floats allowed); repeat is the client-repeat flag of firmware 9 and later
-    setRadio: function (freqKHz, bwKHz, sf, cr, repeat) {
-      var p = [word(Math.round(freqKHz * 1000)), word(Math.round(bwKHz * 1000)), Uint8Array.of(sf, cr)];
+    setRadio: function (freqMHz, bwKHz, sf, cr, repeat) {
+      var p = [word(Math.round(freqMHz * 1000)), word(Math.round(bwKHz * 1000)), Uint8Array.of(sf, cr)];
       if (repeat != null) p.push(Uint8Array.of(repeat ? 1 : 0));
       return frame(CMD.SET_RADIO, p);
     },
@@ -177,7 +177,7 @@
         return { t: 'self', advType: v[1], txPower: i8(v[2]), maxTxPower: v[3], key: hex(v, 4, KEY_LEN),
           lat: i32(v, 36) / 1e6, lon: i32(v, 40) / 1e6, multiAcks: v[44], advertLoc: v[45], telemetry: v[46],
           teleBase: v[46] & 3, teleLoc: v[46] >> 2 & 3, teleEnv: v[46] >> 4 & 3,
-          manualAdd: v[47], freqKHz: u32(v, 48) / 1000, bwKHz: u32(v, 52) / 1000, sf: v[56], cr: v[57],
+          manualAdd: v[47], freqMHz: u32(v, 48) / 1000, bwKHz: u32(v, 52) / 1000, sf: v[56], cr: v[57],
           name: utf8d.decode(v.subarray(58)) };
       case RESP.DEVICE_INFO:
         return { t: 'device', fwVer: v[1], maxContacts: v[2] * 2, maxChannels: v[3], build: cstr(v, 8, 12),
