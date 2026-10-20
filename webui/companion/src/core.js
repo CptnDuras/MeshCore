@@ -194,6 +194,15 @@
     return true;
   }
 
+  // ---- a short beep for new messages (opt-in; browsers only allow audio after the page has been clicked once) ----
+  var actx = null;
+  document.addEventListener('click', function () { if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { } } }, { once: true });
+  function beep() {
+    if (!actx || !settings.sound) return;
+    try { var o = actx.createOscillator(), g = actx.createGain(); o.frequency.value = 880; g.gain.value = 0.05; o.connect(g); g.connect(actx.destination); o.start(); o.stop(actx.currentTime + 0.12); } catch (e) { }
+  }
+  bus.on('msg', function (e) { if (e.incoming && e.msg && !e.msg.cli && !S.muted[e.conv] && (S.active !== e.conv || document.hidden)) beep(); });
+
   // ---- push events ----
   function push(m) {
     switch (m.t) {
