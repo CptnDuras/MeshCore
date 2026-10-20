@@ -66,7 +66,7 @@
     run: function (req, onProgress) {
       // the repeaters are spread over Web Workers (one fewer than the processors, at most 6); a long reach is capped here, the full planner has no such cap
       var threads = Math.max(2, Math.min(6, (navigator.hardwareConcurrency || 4) - 1));
-      return root.Planrun.run(req, fetchTile, onProgress, { maxTiles: 200, maxReachKm: 120, makePool: root.PoolWeb ? root.PoolWeb.make(threads) : null });
+      return root.Planrun.run(req, fetchTile, onProgress, { maxTiles: 400, maxReachKm: 300, makePool: root.PoolWeb ? root.PoolWeb.make(threads) : null });
     },
     link: function (req) { return root.Planrun.link(req, fetchTile); }
   };
