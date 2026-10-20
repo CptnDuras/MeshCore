@@ -185,6 +185,22 @@
       updateCount();
     }
 
+    // text with web links made clickable and any written coordinates turned into a button that opens them on the map
+    function withPlaces(m) {
+      var found = W.settings.coords === false ? [] : UI.findCoords(m.text);
+      if (!found.length) return UI.linkify(m.text);
+      var frag = document.createDocumentFragment(), at = 0;
+      found.forEach(function (c) {
+        var label = c.lat.toFixed(5) + ', ' + c.lon.toFixed(5), who = m.me ? 'You' : (m.who || 'Message');
+        var chip = UI.btn(label, { icon: 'pin', kind: 'small coord', title: 'Show on the map', onclick: function (e) { e.stopPropagation(); W.mapFocus(c.lat, c.lon, who + ': ' + label); } });
+        if (c.link) { frag.appendChild(UI.linkify(m.text.slice(at, c.end))); frag.appendChild(document.createTextNode(' ')); }
+        else { frag.appendChild(UI.linkify(m.text.slice(at, c.start))); }
+        frag.appendChild(chip); at = c.end;
+      });
+      frag.appendChild(UI.linkify(m.text.slice(at)));
+      return frag;
+    }
+
     function render() {
       var wasStuck = stick; UI.clear(thread);
       var list = S.convs[conv] || [], lastDay = '';
@@ -202,7 +218,7 @@
           var img = el('img', { class: 'gif', alt: 'GIF', loading: 'lazy', referrerpolicy: 'no-referrer', src: 'https://media.giphy.com/media/' + special.id + '/giphy.gif' });
           img.onerror = function () { img.replaceWith(el('span', { class: 'dim', text: 'GIF (needs internet): ' + special.id })); };
           body.appendChild(img);
-        } else body.appendChild(UI.linkify(m.text));
+        } else body.appendChild(withPlaces(m));
         b.appendChild(body);
         if (m.reactions && m.reactions.length) {
           var counts = {}; m.reactions.forEach(function (r) { counts[r.e] = (counts[r.e] || 0) + 1; });

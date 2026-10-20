@@ -53,7 +53,7 @@
       var wx = ((tx % n) + n) % n, key = z + '/' + tx + '/' + ty; seen[key] = 1;
       var im = tiles[key];
       if (!im) {
-        im = el('img', { alt: '', draggable: 'false', loading: 'lazy', src: 'https://tile.openstreetmap.org/' + z + '/' + wx + '/' + ty + '.png', referrerpolicy: 'no-referrer' });
+        im = el('img', { alt: '', draggable: 'false', loading: 'lazy', src: 'https://tile.openstreetmap.org/' + z + '/' + wx + '/' + ty + '.png', referrerpolicy: 'origin' });   // OpenStreetMap's tile servers answer "Access blocked" to a request with no referrer; the origin alone (no path) is enough
         im.className = 'tile'; im.onerror = function () { this.style.visibility = 'hidden'; }; tiles[key] = im; tilesEl.appendChild(im);
       }
       im.style.transform = 'translate(' + Math.round(tx * T - c.x + w / 2) + 'px,' + Math.round(ty * T - c.y + h / 2) + 'px)';

@@ -219,6 +219,52 @@
     document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 500);
   }
   var URL_RE = /(https?:\/\/[^\s<>"']+)/g;
+
+  // ---- coordinates in text ----
+  // Finds places written in a message: "33.4484, -112.0740", "N 33.4484 W 112.0740", "33°26'54"N 112°04'26"W", "geo:33.4,-112.0", and
+  // map links (Google, OpenStreetMap, Apple) that carry a position. Returns [{start, end, lat, lon, link}] in text order; `link` marks a
+  // position found inside a web link (the link stays as it is and the place is offered beside it).
+  var DEC = '(-?\\d{1,3}\\.\\d{4,})', HEMI = '([NSEW])', NUM = '(\\d{1,3}(?:\\.\\d+)?)';
+  var PAIR_RE = new RegExp('(?<![\\d.\\w-])' + DEC + '\\s*[,;/ ]\\s*' + DEC + '(?![\\d.\\w])', 'g');
+  var HEMI_RE = new RegExp('(?<![\\w.])' + HEMI + '\\s*' + NUM + '°?\\s*,?\\s*' + HEMI + '\\s*' + NUM + '°?(?![\\d.\\w])|(?<![\\d.\\w])' + NUM + '°?\\s*' + HEMI + '\\s*,?\\s*' + NUM + '°?\\s*' + HEMI + '(?![\\w.])', 'gi');
+  var DMS_RE = /(\d{1,3})°\s*(\d{1,2})['′]\s*(?:(\d{1,2}(?:\.\d+)?)["″]?)?\s*([NSEW])[\s,;/]*(\d{1,3})°\s*(\d{1,2})['′]\s*(?:(\d{1,2}(?:\.\d+)?)["″]?)?\s*([NSEW])/gi;
+  function okLatLon(lat, lon) { return isFinite(lat) && isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180 && !(lat === 0 && lon === 0); }
+  function signed(v, h) { h = h.toUpperCase(); return h === 'S' || h === 'W' ? -v : v; }
+  function fromHemis(a, ha, b, hb) {   // two values with letters, in either order
+    ha = ha.toUpperCase(); hb = hb.toUpperCase();
+    if ('NS'.indexOf(ha) >= 0 && 'EW'.indexOf(hb) >= 0) return { lat: signed(a, ha), lon: signed(b, hb) };
+    if ('EW'.indexOf(ha) >= 0 && 'NS'.indexOf(hb) >= 0) return { lat: signed(b, hb), lon: signed(a, ha) };
+    return null;
+  }
+  function urlCoords(u) {
+    var m = /[@/](-?\d{1,3}\.\d+),(-?\d{1,3}\.\d+)/.exec(u) || /[?&](?:q|ll|query|center|sll|daddr|destination)=(-?\d{1,3}\.\d+)(?:,|%2C)(-?\d{1,3}\.\d+)/i.exec(u)
+      || /[?&]mlat=(-?\d{1,3}\.\d+)&(?:amp;)?mlon=(-?\d{1,3}\.\d+)/i.exec(u) || /#map=\d+\/(-?\d{1,3}\.\d+)\/(-?\d{1,3}\.\d+)/.exec(u);
+    return m && okLatLon(+m[1], +m[2]) ? { lat: +m[1], lon: +m[2] } : null;
+  }
+  function findCoords(text) {
+    var out = [], taken = [], m;
+    function free(s, e) { return !taken.some(function (t) { return s < t[1] && e > t[0]; }); }
+    function add(s, e, p, link) { if (p && okLatLon(p.lat, p.lon) && free(s, e)) { taken.push([s, e]); out.push({ start: s, end: e, lat: p.lat, lon: p.lon, link: !!link }); } }
+    URL_RE.lastIndex = 0;
+    while ((m = URL_RE.exec(text))) {
+      var url = m[1].replace(/[.,;:!?)]+$/, ''), p = urlCoords(url);
+      taken.push([m.index, m.index + url.length]);   // nothing inside a link is read as a place on its own
+      if (p) out.push({ start: m.index, end: m.index + url.length, lat: p.lat, lon: p.lon, link: true });
+      URL_RE.lastIndex = m.index + url.length;
+    }
+    var g = /\bgeo:(-?\d{1,3}(?:\.\d+)?),(-?\d{1,3}(?:\.\d+)?)/gi;
+    while ((m = g.exec(text))) add(m.index, m.index + m[0].length, { lat: +m[1], lon: +m[2] });
+    DMS_RE.lastIndex = 0;
+    while ((m = DMS_RE.exec(text))) {
+      var a = +m[1] + m[2] / 60 + (+m[3] || 0) / 3600, b = +m[5] + m[6] / 60 + (+m[7] || 0) / 3600;
+      add(m.index, m.index + m[0].length, fromHemis(a, m[4], b, m[8]));
+    }
+    HEMI_RE.lastIndex = 0;
+    while ((m = HEMI_RE.exec(text))) add(m.index, m.index + m[0].length, m[1] ? fromHemis(+m[2], m[1], +m[4], m[3]) : fromHemis(+m[5], m[6], +m[7], m[8]));
+    PAIR_RE.lastIndex = 0;
+    while ((m = PAIR_RE.exec(text))) add(m.index, m.index + m[0].length, { lat: +m[1], lon: +m[2] });
+    return out.sort(function (x, y) { return x.start - y.start; });
+  }
   // text with web links made clickable; every piece is a text node or an anchor built from the matched text, never markup
   function linkify(text) {
     var frag = document.createDocumentFragment(), last = 0, m;
@@ -235,5 +281,5 @@
 
   root.UI = { el: el, $: $, clear: clear, icon: icon, btn: btn, avatar: avatar, toast: toast, dialog: dialog, confirm: confirmBox, alert: alertBox,
     form: formBox, menu: menu, ago: ago, clock: clock, dayLabel: dayLabel, dur: dur, short: short, copy: copy, download: download,
-    linkify: linkify, hueOf: hueOf, firstGlyph: firstGlyph };
+    linkify: linkify, findCoords: findCoords, hueOf: hueOf, firstGlyph: firstGlyph };
 })(window);

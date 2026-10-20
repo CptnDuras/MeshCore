@@ -19,7 +19,7 @@
   };
 
   // ---- app settings (this browser only) ----
-  var DEFAULT_SETTINGS = { theme: 'auto', units: 'metric', textScale: 1, retries: 3, sound: false, showTrace: false, clearPathOnFail: false, markRead: true };
+  var DEFAULT_SETTINGS = { theme: 'auto', units: 'metric', textScale: 1, retries: 3, sound: false, showTrace: false, coords: true, clearPathOnFail: false, markRead: true };
   var settings = Object.assign({}, DEFAULT_SETTINGS, store.get('mcw2:settings', {}));
   function setSetting(k, v) { settings[k] = v; store.set('mcw2:settings', settings); bus.emit('settings', k); }
 

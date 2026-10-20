@@ -177,6 +177,7 @@
       row('Message text size', null, seg('textScale', [[0.9, 'Small'], [1, 'Normal'], [1.2, 'Large']])),
       row('Sound on new messages', 'A short beep when a message arrives in a conversation you are not looking at', toggle(W.settings.sound, function (on) { W.setSetting('sound', on); })),
       row('Show signal details on messages', 'Signal quality and number of hops', toggle(W.settings.showTrace, function (on) { W.setSetting('showTrace', on); })),
+      row('Find places in messages', 'Coordinates and map links in a message get a button that shows them on the map', toggle(W.settings.coords !== false, function (on) { W.setSetting('coords', on); })),
       row('Send tries for a direct message', 'How often an unanswered message is sent again', el('select', { class: 'sel', 'aria-label': 'Tries', onchange: function (e) { W.setSetting('retries', +e.target.value); } },
         [1, 2, 3, 4, 5, 6].map(function (n) { return el('option', { value: n, text: n, selected: W.settings.retries === n }); }))),
       row('Forget the route after the last try fails', null, toggle(W.settings.clearPathOnFail, function (on) { W.setSetting('clearPathOnFail', on); })),
