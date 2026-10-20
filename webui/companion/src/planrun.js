@@ -17,14 +17,18 @@
     var la = pts.map(function (q) { return q.lat; }), lo = pts.map(function (q) { return q.lon; }), mid = (Math.min.apply(0, la) + Math.max.apply(0, la)) / 2;
     var bbox = { south: Math.min.apply(0, la) - rangeDeg, north: Math.max.apply(0, la) + rangeDeg, west: Math.min.apply(0, lo) - rangeDeg / Math.cos(mid * Math.PI / 180), east: Math.max.apply(0, lo) + rangeDeg / Math.cos(mid * Math.PI / 180) };
     say('Loading terrain…', 0);
-    var dem = await G.loadDem(bbox, fetchTile, { maxTiles: opts.maxTiles, maxZoom: opts.maxZoom, minZoom: opts.minZoom, parallel: opts.parallel,
+    var dem = await G.loadDem(bbox, fetchTile, { maxTiles: opts.maxTiles, maxZoom: opts.maxZoom, minZoom: opts.minZoom, parallel: opts.parallel, shared: !!opts.makePool,
       onProgress: function (a, b) { say('Loading terrain… ' + a + ' of ' + b + ' tiles', a / b); } });
     var live = 0, total = 0; for (var i = 0; i < dem.data.length; i += 997) { total++; if (dem.data[i] === dem.data[i]) live++; }
     if (live < total * 0.5) throw new Error('No terrain data came back for that area.');
     var cp = Math.max(1, Math.round((opts.cellM || 120) / G.mPerPx(mid, dem.z))), grid = G.makeGrid(dem, cp);
     var nodes = req.nodes || [];
-    var res = await G.plan({ dem: dem, grid: grid, p: p, existing: sites, count: count, area: vb, requireLink: req.link, nodes: nodes, repeater: req.repeater,
-      maxCandidates: opts.maxCandidates, onProgress: function (t, f) { say(t, f); } });
+    // opts.makePool(dem, grid, p) -> { evalCandidates(sites, onDone) -> Promise<Uint32Array[]>, close() } spreads the candidate sites over several processors
+    var pool = opts.makePool && count ? opts.makePool(dem, grid, p) : null, res;
+    try {
+      res = await G.plan({ dem: dem, grid: grid, p: p, existing: sites, count: count, area: vb, requireLink: req.link, nodes: nodes, repeater: req.repeater,
+        maxCandidates: opts.maxCandidates, evalCandidates: pool && pool.evalCandidates, onProgress: function (t, f) { say(t, f); } });
+    } finally { if (pool) pool.close(); }
     var cov = 0; for (var k = 0; k < res.covered.length; k++) cov += res.covered[k];
     var inside = [], outside = [];
     nodes.forEach(function (n) { var c = G.cellOf(grid, n.lat, n.lon); if (c < 0) return; (res.margin[c] >= p.fade ? inside : outside).push(n.name || ''); });

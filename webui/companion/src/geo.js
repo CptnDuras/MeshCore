@@ -51,7 +51,7 @@
       var km = Math.round(haversine({ lat: bbox.north, lon: bbox.west }, { lat: bbox.north, lon: bbox.east }) / 1000);
       throw new Error('The area is ' + km + ' km wide, more than the planner can load terrain for at once (about ' + Math.round(km * Math.sqrt(maxTiles / r.n)) + ' km). Zoom the map in, or lower the range.');
     }
-    var w = (r.x1 - r.x0 + 1) * T, h = (r.y1 - r.y0 + 1) * T, dem = { z: z, x0: r.x0 * T, y0: r.y0 * T, w: w, h: h, data: new Float32Array(w * h) };
+    var w = (r.x1 - r.x0 + 1) * T, h = (r.y1 - r.y0 + 1) * T, dem = { z: z, x0: r.x0 * T, y0: r.y0 * T, w: w, h: h, data: opts.shared && typeof SharedArrayBuffer !== 'undefined' ? new Float32Array(new SharedArrayBuffer(w * h * 4)) : new Float32Array(w * h) };
     var jobs = [], done = 0, n = Math.pow(2, z);
     for (var ty = Math.max(0, r.y0); ty <= Math.min(n - 1, r.y1); ty++) for (var tx = r.x0; tx <= r.x1; tx++) jobs.push([tx, ty]);
     async function worker() {
@@ -248,7 +248,11 @@
     (ctx.nodes || []).forEach(function (n) { var c = cellOf(grid, n.lat, n.lon); if (c >= 0) { weight[c] += 20; nodeCells[c] = (nodeCells[c] || 0) + 1; } });
     var cands = candidates(dem, grid, ctx.area, { max: ctx.maxCandidates || 120 }), tmpl = ctx.repeater;
     cands.forEach(function (c) { var pt = cellCentre(grid, c.idx); c.site = { lat: pt.lat, lon: pt.lon, h: tmpl.h, dbm: tmpl.dbm, gain: tmpl.gain, cable: tmpl.cable }; });
-    for (var k = 0; k < cands.length; k++) {
+    if (ctx.evalCandidates) {
+      // the caller has several processors: it returns, for each candidate site, the cells that site would cover
+      var covers = await ctx.evalCandidates(cands.map(function (c) { return c.site; }), function (done) { if (ctx.onProgress) ctx.onProgress('Trying sites (' + done + ' of ' + cands.length + ')', 0.2 + 0.7 * done / cands.length); });
+      cands.forEach(function (c, j) { c.cover = covers[j]; });
+    } else for (var k = 0; k < cands.length; k++) {
       var c = cands[k]; marginMap(dem, grid, c.site, p, buf);
       var cover = []; for (i = 0; i < N; i++) if (buf[i] >= p.fade) cover.push(i);
       c.cover = Uint32Array.from(cover);
