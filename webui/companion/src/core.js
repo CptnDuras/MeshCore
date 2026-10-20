@@ -111,7 +111,7 @@
     restore(); bus.emit('self');
     setStatus('online');
     // each of these is allowed to fail without stopping the rest: the page is useful with whatever the node answers
-    var tasks = [function () { return syncClock(false); }, loadChannels, loadContacts, refreshBattery, loadAutoAdd, loadVars];
+    var tasks = [function () { return syncClock(false); }, loadChannels, loadContacts, loadHistory, refreshBattery, loadAutoAdd, loadVars];
     for (var i = 0; i < tasks.length; i++) { try { await tasks[i](); } catch (e) { console.warn('startup step failed:', e.message); } if (my !== gen) return; }
     await syncAll();
   }
@@ -163,6 +163,35 @@
   function parseReply(text) {    // "@[Name] message" is how a reply is written on the wire
     var m = /^@\[([^\]]{1,40})\]\s?([\s\S]*)$/.exec(text);
     return m ? { replyTo: m[1], text: m[2] } : { text: text };
+  }
+  // history kept on the node: merged into the conversations without touching unread counts or sounds.
+  // A node without the log answers with an error, and the page just carries on with what the browser has.
+  async function loadHistory() {
+    var first = 0, added = 0;
+    for (;;) {
+      var h = await req(MC.enc.getHistory(first), ['history']);
+      h.recs.forEach(function (r) { if (mergeRecord(r)) added++; });
+      first += h.recs.length;
+      if (!h.recs.length || first >= h.total) break;
+    }
+    if (added) { for (var k in S.convs) S.convs[k].sort(function (a, b) { return a.ts - b.ts; }); persist(); bus.emit('history'); }
+  }
+  function mergeRecord(r) {
+    if (r.txt !== 0 || /^r:[0-9a-f]{4}:[0-9a-f]{2}$/.test(r.text)) return false;
+    var conv, who = '', text = r.text, extra = {};
+    if (r.channel) {
+      conv = 'ch:' + r.idx;
+      if (!r.sent) { var sp = splitSender(text); who = sp.who; text = sp.text; }
+      var rp = parseReply(text); text = rp.text; if (rp.replyTo) extra.replyTo = rp.replyTo;
+    } else {
+      var c = findContact(r.target); conv = c ? c.key : r.target; who = r.sent ? '' : (c ? c.name : r.target);
+    }
+    var list = S.convs[conv] = S.convs[conv] || [];
+    if (list.some(function (x) { return !!x.me === r.sent && x.ts === r.ts && x.text === text && (r.sent || x.who === who); })) return false;
+    var base = r.sent ? { me: true, channel: r.channel, text: text, ts: r.ts, status: 'sent', tries: 1 }
+      : { me: false, channel: r.channel, text: text, ts: r.ts, who: who, snr: r.snr, hops: r.pathLen === 255 ? -1 : r.pathLen & 63, recvAt: r.ts };
+    addMsg(conv, Object.assign(base, extra));
+    return true;
   }
   function onMsg(m) {
     var conv, who = '', text = m.text, extra = {};
@@ -288,7 +317,7 @@
   function unreadTotal(prefix) { var n = 0; for (var k in S.unread) if (!prefix || k.indexOf(prefix) === 0 || (prefix === 'dm' && k.indexOf('ch:') !== 0)) n += S.unread[k] || 0; return n; }
 
   root.W = { bus: bus, store: store, settings: settings, setSetting: setSetting, S: S, req: req, send: send, connect: connect, devNow: devNow,
-    syncClock: syncClock, loadContacts: loadContacts, loadChannels: loadChannels, refreshBattery: refreshBattery, loadAutoAdd: loadAutoAdd, loadVars: loadVars,
+    syncClock: syncClock, loadHistory: loadHistory, loadContacts: loadContacts, loadChannels: loadChannels, refreshBattery: refreshBattery, loadAutoAdd: loadAutoAdd, loadVars: loadVars,
     syncAll: syncAll, findContact: findContact, sendDm: sendDm, sendChannel: sendChannel, sendReaction: sendReaction, EMOJI: EMOJI, msgHash: msgHash,
     clearConv: clearConv, markRead: markRead, unreadTotal: unreadTotal, persist: persist, maxChannelBytes: maxChannelBytes, maxDmBytes: maxDmBytes,
     regionFor: regionFor, nodeKey: nodeKey, attempt: attempt, addMsg: addMsg };

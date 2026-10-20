@@ -9,11 +9,11 @@
     BATT: 20, SET_TUNING: 21, DEVICE_QUERY: 22, LOGIN: 26, STATUS_REQ: 27, LOGOUT: 29, GET_CHANNEL: 31, SET_CHANNEL: 32,
     TRACE: 36, SET_OTHER: 38, TELEMETRY_REQ: 39, GET_VARS: 40, SET_VAR: 41, ADVERT_PATH: 42, GET_TUNING: 43,
     BINARY_REQ: 50, PATH_DISCOVERY: 52, SET_SCOPE: 54, CONTROL: 55, GET_STATS: 56, ANON_REQ: 57, SET_AUTOADD: 58,
-    GET_AUTOADD: 59, GET_REPEAT_FREQ: 60, SET_HASH_MODE: 61, SET_DEFAULT_SCOPE: 63, GET_DEFAULT_SCOPE: 64, CLI: 66 };
+    GET_AUTOADD: 59, GET_REPEAT_FREQ: 60, SET_HASH_MODE: 61, SET_DEFAULT_SCOPE: 63, GET_DEFAULT_SCOPE: 64, CLI: 66, GET_HISTORY: 67, CLEAR_HISTORY: 68 };
   var RESP = { OK: 0, ERR: 1, CONTACTS_START: 2, CONTACT: 3, CONTACTS_END: 4, SELF_INFO: 5, SENT: 6,
     CONTACT_MSG: 7, CHANNEL_MSG: 8, TIME: 9, NO_MORE: 10, EXPORT: 11, BATT: 12, DEVICE_INFO: 13, DISABLED: 15,
     CONTACT_MSG_V3: 16, CHANNEL_MSG_V3: 17, CHANNEL_INFO: 18, VARS: 21, ADVERT_PATH: 22, TUNING: 23, STATS: 24,
-    AUTOADD: 25, REPEAT_FREQ: 26, DEFAULT_SCOPE: 28, CLI_REPLY: 29 };
+    AUTOADD: 25, REPEAT_FREQ: 26, DEFAULT_SCOPE: 28, CLI_REPLY: 29, HISTORY: 30 };
   var PUSH = { ADVERT: 0x80, PATH_UPDATED: 0x81, SEND_CONFIRMED: 0x82, MSG_WAITING: 0x83, LOGIN_OK: 0x85, LOGIN_FAIL: 0x86,
     STATUS: 0x87, LOG_RX: 0x88, TRACE: 0x89, NEW_ADVERT: 0x8a, TELEMETRY: 0x8b, BINARY: 0x8c, PATH_DISCOVERY: 0x8d,
     CONTROL: 0x8e, CONTACT_DELETED: 0x8f, CONTACTS_FULL: 0x90 };
@@ -78,6 +78,8 @@
     sendChannel: function (idx, text, ts) {
       return frame(CMD.SEND_CHAN_TXT, [Uint8Array.of(0, idx), word(ts), clipUtf8(text, MAX_TEXT)]);
     },
+    getHistory: function (first) { return frame(CMD.GET_HISTORY, [Uint8Array.of(first & 255, first >> 8 & 255)]); },
+    clearHistory: function () { return Uint8Array.of(CMD.CLEAR_HISTORY); },
     cli: function (text) { return frame(CMD.CLI, [clipUtf8(text, 150)]); },
 
     setName: function (name) { return frame(CMD.SET_NAME, [clipUtf8(name, NAME_LEN - 1)]); },
@@ -195,6 +197,16 @@
       case RESP.BATT: return { t: 'battery', mv: v[1] | v[2] << 8, usedKb: u32(v, 3), totalKb: u32(v, 7) };
       case RESP.CHANNEL_INFO: return { t: 'channel', idx: v[1], name: cstr(v, 2, NAME_LEN), secret: hex(v, 34, 16) };
       case RESP.CLI_REPLY: return { t: 'cli', text: utf8d.decode(v.subarray(1)) };
+      case RESP.HISTORY: {
+        // [total u16][first u16][count u8] then count x [len u8][kind][ts u32][snr i8][path][txt type][target 6][text]
+        var recs = [], p = 6;
+        for (var n = 0; n < v[5] && p < v.length; n++) {
+          var rl = v[p], r = p + 1; p += 1 + rl;
+          recs.push({ kind: v[r], sent: v[r] >= 2, channel: (v[r] & 1) === 1, ts: u32(v, r + 1), snr: i8(v[r + 5]) / 4, pathLen: v[r + 6],
+            txt: v[r + 7], target: hex(v, r + 8, 6), idx: v[r + 8], text: utf8d.decode(v.subarray(r + 14, r + rl)) });
+        }
+        return { t: 'history', total: u16(v, 1), first: u16(v, 3), recs: recs };
+      }
       case RESP.EXPORT: return { t: 'export', bytes: v.slice(1) };
       case RESP.VARS: {
         var vars = {}, txt = utf8d.decode(v.subarray(1));

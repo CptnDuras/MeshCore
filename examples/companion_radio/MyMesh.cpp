@@ -69,6 +69,8 @@
 #define CMD_GET_DEFAULT_FLOOD_SCOPE   64
 #define CMD_SEND_RAW_PACKET           65
 #define CMD_RUN_CLI_COMMAND           66  // v14+
+#define CMD_GET_HISTORY               67  // WITH_WEBUI: [first u16] -> RESP_CODE_HISTORY
+#define CMD_CLEAR_HISTORY             68  // WITH_WEBUI
 
 // Stats sub-types for CMD_GET_STATS
 #define STATS_TYPE_CORE               0
@@ -105,6 +107,7 @@
 #define RESP_CODE_CHANNEL_DATA_RECV   27
 #define RESP_CODE_DEFAULT_FLOOD_SCOPE 28
 #define RESP_CODE_CLI_REPLY           29  // v14+, a reply to CMD_RUN_CLI_COMMAND
+#define RESP_CODE_HISTORY             30  // WITH_WEBUI: [total u16][first u16][count u8] then count x [len u8][record]
 
 #define MAX_CHANNEL_DATA_LENGTH       (MAX_FRAME_SIZE - 9)
 
@@ -468,6 +471,9 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
   memcpy(&out_frame[i], text, tlen);
   i += tlen;
   addToOfflineQueue(out_frame, i);
+#ifdef WITH_WEBUI
+  if (txt_type == TXT_TYPE_PLAIN) msg_log.append(MessageLog::FROM_CONTACT, sender_timestamp, (int8_t)(pkt->getSNR() * 4), path_len, txt_type, from.id.pub_key, text);
+#endif
 
   if (_serial->isConnected()) {
     uint8_t frame[1];
@@ -584,6 +590,12 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
   memcpy(&out_frame[i], text, tlen);
   i += tlen;
   addToOfflineQueue(out_frame, i);
+#ifdef WITH_WEBUI
+  {
+    uint8_t target[6] = {channel_idx, 0, 0, 0, 0, 0};
+    msg_log.append(MessageLog::FROM_CHANNEL, timestamp, (int8_t)(pkt->getSNR() * 4), path_len, TXT_TYPE_PLAIN, target, text);
+  }
+#endif
 
   if (_serial->isConnected()) {
     uint8_t frame[1];
@@ -1015,6 +1027,9 @@ void MyMesh::begin() {
   bootstrapRTCfromContacts();
   addChannel("Public", PUBLIC_GROUP_PSK); // pre-configure public channel
   _store->loadChannels(this);
+#ifdef WITH_WEBUI
+  msg_log.begin(_store->getPrimaryFS());
+#endif
 
   radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
   radio_driver.setTxPower(_prefs.tx_power_dbm);
@@ -1167,6 +1182,11 @@ void MyMesh::handleCmdFrame(size_t len) {
         expected_ack = 0; // no Ack expected
       } else {
         result = sendMessage(*recipient, msg_timestamp, attempt, text, expected_ack, est_timeout);
+#ifdef WITH_WEBUI
+        if (result != MSG_SEND_FAILED && attempt == 0 && txt_type == TXT_TYPE_PLAIN) {   // retries repeat the same message
+          msg_log.append(MessageLog::TO_CONTACT, msg_timestamp, 0, 0, txt_type, pub_key_prefix, text);
+        }
+#endif
       }
       // TODO: add expected ACK to table
       if (result == MSG_SEND_FAILED) {
@@ -1205,6 +1225,15 @@ void MyMesh::handleCmdFrame(size_t len) {
       ChannelDetails channel;
       bool success = getChannel(channel_idx, channel);
       if (success && sendGroupMessage(msg_timestamp, channel.channel, _prefs.node_name, text, len - i)) {
+#ifdef WITH_WEBUI
+        {
+          char sent[MessageLog::MAX_TEXT + 1];   // the frame's text is not terminated
+          int slen = len - i < MessageLog::MAX_TEXT ? len - i : MessageLog::MAX_TEXT;
+          memcpy(sent, text, slen); sent[slen] = 0;
+          uint8_t target[6] = {channel_idx, 0, 0, 0, 0, 0};
+          msg_log.append(MessageLog::TO_CHANNEL, msg_timestamp, 0, 0, TXT_TYPE_PLAIN, target, sent);
+        }
+#endif
         writeOKFrame();
       } else {
         writeErrFrame(ERR_CODE_NOT_FOUND); // bad channel_idx
@@ -1980,6 +2009,21 @@ void MyMesh::handleCmdFrame(size_t len) {
     } else {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG); // invalid stats sub-type
     }
+#ifdef WITH_WEBUI
+  } else if (cmd_frame[0] == CMD_GET_HISTORY && len >= 3) {   // [67][first u16]
+    uint16_t first = cmd_frame[1] | (cmd_frame[2] << 8);
+    uint16_t total = msg_log.total();
+    int count = 0;
+    int used = msg_log.read(first, &out_frame[6], MAX_FRAME_SIZE - 6, count);
+    out_frame[0] = RESP_CODE_HISTORY;
+    out_frame[1] = total & 0xFF; out_frame[2] = total >> 8;
+    out_frame[3] = first & 0xFF; out_frame[4] = first >> 8;
+    out_frame[5] = count;
+    _serial->writeFrame(out_frame, 6 + used);
+  } else if (cmd_frame[0] == CMD_CLEAR_HISTORY) {
+    msg_log.clear();
+    writeOKFrame();
+#endif
   } else if (cmd_frame[0] == CMD_FACTORY_RESET && memcmp(&cmd_frame[1], "reset", 5) == 0) {
     if (_serial) {
       MESH_DEBUG_PRINTLN("Factory reset: disabling serial interface to prevent reconnects (BLE/WiFi)");

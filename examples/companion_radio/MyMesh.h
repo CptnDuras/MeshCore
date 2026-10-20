@@ -24,6 +24,9 @@
 
 #include "DataStore.h"
 #include "NodePrefs.h"
+#ifdef WITH_WEBUI
+#include "MessageLog.h"
+#endif
 
 #include <RTClib.h>
 #include <helpers/ArduinoHelpers.h>
@@ -279,6 +282,9 @@ private:
   };
   int offline_queue_len;
   Frame offline_queue[OFFLINE_QUEUE_SIZE];
+#ifdef WITH_WEBUI
+  MessageLog msg_log;   // history kept in flash for the web page
+#endif
 
   struct AckTableEntry {
     unsigned long msg_sent;
