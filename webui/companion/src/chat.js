@@ -17,34 +17,105 @@
     return m ? { kind: 'gif', id: m[1] } : null;
   }
 
+  var MAX_PARTS = 8;   // a long message is sent as several; this keeps one paste from flooding the mesh
+
+  // Cuts text into pieces of at most `limit` bytes (the first `reserve` bytes shorter), at a line break or space when there is one nearby
+  // and never inside an @[Name] tag or a character.
+  function splitText(text, limit, reserve) {
+    var out = [], rest = String(text).trim(), lim = limit - (reserve || 0);
+    while (rest) {
+      if (MC.byteLen(rest) <= lim) { out.push(rest); break; }
+      var i = 0, bytes = 0;
+      while (i < rest.length) {
+        var w = rest.codePointAt(i) > 0xffff ? 2 : 1, b = MC.byteLen(rest.slice(i, i + w));
+        if (bytes + b > lim) break; bytes += b; i += w;
+      }
+      if (i === 0) i = 1;
+      var head = rest.slice(0, i), nl = head.lastIndexOf('\n'), sp = head.lastIndexOf(' ');
+      var at = nl > i * 0.3 ? nl : sp > i * 0.3 ? sp : i;
+      var tag = rest.lastIndexOf('@[', at - 1);
+      if (tag > 0 && rest.indexOf(']', tag) >= at) at = tag;
+      out.push(rest.slice(0, at).trim()); rest = rest.slice(at).trim(); lim = limit;
+    }
+    return out;
+  }
+
   // opts: conv, kind ('dm'|'channel'), title(), subtitle(), avatar(), canSend, channelIdx, menu() -> items, onBack
   function open(box, opts) {
     UI.clear(box);
     var conv = opts.conv, replyTo = null, stick = true, offs = [];
     var thread = el('div', { class: 'thread', role: 'log', 'aria-live': 'polite', 'aria-label': 'Messages' });
     var top = el('div', { class: 'dtop' });
-    var input = el('textarea', { rows: 1, placeholder: opts.canSend === false ? 'You cannot send here' : 'Message', 'aria-label': 'Message', disabled: opts.canSend === false, maxlength: 400 });
+    var input = el('textarea', { rows: 1, placeholder: opts.canSend === false ? 'You cannot send here' : 'Message', 'aria-label': 'Message', disabled: opts.canSend === false, maxlength: MAX_PARTS * 200 });
+    var picker = el('div', { class: 'mentions', role: 'listbox', 'aria-label': 'People to mention', hidden: true });
     var count = el('div', { class: 'count' });
     var replybar = el('div', { class: 'replybar', hidden: true });
     var sendBtn = UI.btn('', { icon: 'send', kind: 'primary', title: 'Send', onclick: submit, disabled: opts.canSend === false });
     var jump = UI.btn('', { icon: 'back', kind: '', title: 'Jump to the newest message', onclick: function () { thread.scrollTop = thread.scrollHeight; } });
     jump.classList.add('jump'); jump.hidden = true; jump.firstChild.style.transform = 'rotate(-90deg)';
     var placeBtn = UI.btn('', { icon: 'pin', kind: 'ghost', title: 'Share a place', onclick: function () { sharePlace(); }, disabled: opts.canSend === false });
-    var comp = el('form', { class: 'compose', onsubmit: function (e) { e.preventDefault(); submit(); } }, [replybar, el('div', { class: 'line' }, [placeBtn, input, sendBtn]), count]);
+    var comp = el('form', { class: 'compose', onsubmit: function (e) { e.preventDefault(); submit(); } }, [picker, replybar, el('div', { class: 'line' }, [placeBtn, input, sendBtn]), count]);
     box.appendChild(top); box.appendChild(thread); box.appendChild(comp); box.appendChild(jump);
     box.style.position = 'relative';
 
     function limit() { return opts.kind === 'channel' ? W.maxChannelBytes() : W.maxDmBytes(); }
     function used() { return MC.byteLen(input.value) + (replyTo ? MC.byteLen('@[' + replyTo.who + '] ') : 0); }
+    function parts() { return splitText(input.value, limit(), replyTo ? MC.byteLen('@[' + replyTo.who + '] ') : 0); }
     function updateCount() {
-      var n = used(), lim = limit();
-      count.textContent = n > lim * 0.6 ? n + ' / ' + lim + ' bytes' : ''; count.className = 'count' + (n > lim ? ' over' : '');
+      var n = used(), lim = limit(), k = n > lim ? parts().length : 1;
+      count.textContent = k > 1 ? n + ' bytes: sends as ' + k + ' messages' + (k > MAX_PARTS ? ' (the most is ' + MAX_PARTS + ')' : '') : n > lim * 0.6 ? n + ' / ' + lim + ' bytes' : '';
+      count.className = 'count' + (k > MAX_PARTS ? ' over' : '');
       input.style.height = 'auto'; input.style.height = Math.min(120, input.scrollHeight) + 'px';
     }
-    input.addEventListener('input', updateCount);
-    input.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey && !coarse) { e.preventDefault(); submit(); } });
+    input.addEventListener('input', function () { updateCount(); showMentions(); });
+    input.addEventListener('click', showMentions);
+    input.addEventListener('blur', function () { setTimeout(hideMentions, 120); });
+    input.addEventListener('keydown', function (e) {
+      if (!picker.hidden) {
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); pickAt = (pickAt + (e.key === 'ArrowDown' ? 1 : -1) + pickList.length) % pickList.length; paintMentions(); return; }
+        if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); chooseMention(pickList[pickAt]); return; }
+        if (e.key === 'Escape') { e.preventDefault(); hideMentions(); return; }
+      }
+      if (e.key === 'Enter' && !e.shiftKey && !coarse) { e.preventDefault(); submit(); } });
     thread.addEventListener('scroll', function () { stick = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 80; jump.hidden = stick; });
     thread.style.setProperty('--ts', W.settings.textScale);
+
+    // typing @ after a space (or at the start) lists the people you can tag; the pick is written as @[Name], the form MeshCore apps use
+    var pickList = [], pickAt = 0, pickFrom = 0;
+    function mentionNames() {
+      var seen = {}, out = [];
+      function add(n) { if (n && !seen[n.toLowerCase()] && !(S.self && n === S.self.name)) { seen[n.toLowerCase()] = 1; out.push(n); } }
+      (S.convs[conv] || []).slice(-200).forEach(function (m) { if (!m.me && m.who) add(m.who); });
+      Object.keys(S.contacts).map(function (k) { return S.contacts[k]; }).filter(function (c) { return c.type !== 2 && c.type !== 4; })
+        .sort(function (a, b) { return (b.lastAdvert || 0) - (a.lastAdvert || 0); }).forEach(function (c) { add(c.name); });
+      return out;
+    }
+    function mentionQuery() {
+      var pos = input.selectionStart, m = /(^|\s)@([^@\[\]\n]{0,31})$/.exec(input.value.slice(0, pos));
+      return m && m[2].charAt(0) !== ' ' ? { from: pos - m[2].length - 1, q: m[2].toLowerCase() } : null;
+    }
+    function showMentions() {
+      var mq = opts.canSend === false ? null : mentionQuery(); if (!mq) { hideMentions(); return; }
+      var all = mentionNames(), starts = all.filter(function (n) { return n.toLowerCase().indexOf(mq.q) === 0; });
+      pickList = starts.concat(all.filter(function (n) { return starts.indexOf(n) < 0 && n.toLowerCase().indexOf(mq.q) > 0; })).slice(0, 8);
+      if (!pickList.length) { hideMentions(); return; }
+      pickFrom = mq.from; pickAt = 0; paintMentions(); picker.hidden = false;
+    }
+    function paintMentions() {
+      UI.clear(picker);
+      pickList.forEach(function (n, i) {
+        var b = el('button', { type: 'button', class: 'mi' + (i === pickAt ? ' on' : ''), role: 'option', 'aria-selected': i === pickAt ? 'true' : 'false' }, [UI.avatar(n, { cls: 'sm' }), el('span', { text: n })]);
+        b.addEventListener('mousedown', function (e) { e.preventDefault(); chooseMention(n); });
+        picker.appendChild(b);
+      });
+    }
+    function hideMentions() { picker.hidden = true; pickList = []; }
+    function chooseMention(name) {
+      var pos = input.selectionStart, ins = '@[' + name + '] ';
+      input.value = input.value.slice(0, pickFrom) + ins + input.value.slice(pos);
+      input.selectionStart = input.selectionEnd = pickFrom + ins.length;
+      hideMentions(); updateCount(); input.focus();
+    }
 
     function renderTop() {
       UI.clear(top);
@@ -160,14 +231,20 @@
     async function submit(override) {
       var text = typeof override === 'string' ? override : input.value.trim(); if (!text || opts.canSend === false) return;
       if (S.status !== 'online') { UI.toast('Not connected to the node', 'bad'); return; }
-      if (typeof override !== 'string' && used() > limit()) { UI.toast('Too long: ' + used() + ' of ' + limit() + ' bytes', 'bad'); return; }
+      var chunks = typeof override === 'string' ? [text] : parts();
+      if (chunks.length > MAX_PARTS) { UI.toast('Too long: that would be ' + chunks.length + ' messages, the most is ' + MAX_PARTS, 'bad'); return; }
       if (typeof override === 'string' && MC.byteLen(text) > limit()) { UI.toast('That place name is too long', 'bad'); return; }
       if (typeof override !== 'string') input.value = '';
       var rp = typeof override === 'string' ? null : replyTo; if (typeof override !== 'string') setReply(null); stick = true; updateCount();
-      try {
-        if (opts.kind === 'channel') await W.sendChannel(opts.channelIdx, text, { replyTo: rp ? rp.who : '' });
-        else await W.sendDm(conv, text);
-      } catch (e) { UI.toast(e.message, 'bad'); }
+      for (var i = 0; i < chunks.length; i++) {
+        var sent;
+        try {
+          sent = opts.kind === 'channel' ? await W.sendChannel(opts.channelIdx, chunks[i], { replyTo: i === 0 && rp ? rp.who : '' }) : await W.sendDm(conv, chunks[i]);
+        } catch (e) { UI.toast(e.message, 'bad'); sent = { status: 'failed' }; }
+        if (sent && sent.status === 'failed' && i + 1 < chunks.length) {   // the rest goes back in the box rather than being lost
+          input.value = chunks.slice(i + 1).join(' '); updateCount(); UI.toast('Stopped: ' + (chunks.length - i - 1) + ' more part(s) were not sent', 'bad'); break;
+        }
+      }
     }
     async function resend(m) {
       if (opts.kind === 'channel') { S.convs[conv] = S.convs[conv].filter(function (x) { return x !== m; }); await W.sendChannel(opts.channelIdx, m.text, { replyTo: m.replyTo }); }
@@ -185,5 +262,5 @@
     if (!coarse && opts.canSend !== false) input.focus();
     return { destroy: function () { offs.forEach(function (f) { f(); }); document.removeEventListener('visibilitychange', vis); if (S.active === conv) S.active = null; }, refresh: function () { renderTop(); render(); } };
   }
-  root.Chat = { open: open };
+  root.Chat = { open: open, splitText: splitText };
 })(window);
