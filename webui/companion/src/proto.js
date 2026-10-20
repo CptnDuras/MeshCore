@@ -105,6 +105,7 @@
     reboot: function () { return frame(CMD.REBOOT, [utf8.encode('reboot')]); },
     getStats: function (type) { return Uint8Array.of(CMD.GET_STATS, type); },
     getRepeatFreq: function () { return Uint8Array.of(CMD.GET_REPEAT_FREQ); },
+    setDefaultScope: function (name, key16) { return name ? frame(CMD.SET_DEFAULT_SCOPE, [padded(utf8.encode(name), 31), pad0(key16, 16)]) : Uint8Array.of(CMD.SET_DEFAULT_SCOPE); },
     getDefaultScope: function () { return Uint8Array.of(CMD.GET_DEFAULT_SCOPE); },
     selfTelemetry: function () { return Uint8Array.of(CMD.TELEMETRY_REQ, 0, 0, 0); },
 
@@ -132,8 +133,8 @@
     },
     binaryReq: function (keyHex, payload) { return frame(CMD.BINARY_REQ, [unhex(keyHex), payload]); },
     telemetryReq: function (keyHex) { return frame(CMD.BINARY_REQ, [unhex(keyHex), Uint8Array.of(3, 0, 0, 0, 0)]); },
-    neighboursReq: function (keyHex, count, offset, order, prefixLen, tag) {
-      return frame(CMD.BINARY_REQ, [unhex(keyHex), Uint8Array.of(6, 0, count, offset & 255, offset >> 8, order, prefixLen), word(tag)]);
+    neighboursReq: function (keyHex, count, offset, order, prefixLen) {
+      return frame(CMD.BINARY_REQ, [unhex(keyHex), Uint8Array.of(6, 0, count, offset & 255, offset >> 8, order, prefixLen)]);
     },
     pathDiscovery: function (keyHex) { return frame(CMD.PATH_DISCOVERY, [Uint8Array.of(0), unhex(keyHex)]); },
     trace: function (tag, auth, flags, pathBytes) { return frame(CMD.TRACE, [word(tag), word(auth), Uint8Array.of(flags), pathBytes]); },
@@ -255,7 +256,24 @@
     }
   }
 
-  var api = { CMD: CMD, RESP: RESP, PUSH: PUSH, ERR: ERR, TYPE: TYPE, FLOOD: FLOOD, enc: enc, dec: dec, hex: hex, unhex: unhex,
+  // the statistics a repeater (or room) answers a status request with
+  function nodeStats(d, isRoom) {
+    if (d.length < 48) return null;
+    var r = { mv: u16(d, 0), queue: u16(d, 2), noise: i16(d, 4), rssi: i16(d, 6), recv: u32(d, 8), sent: u32(d, 12), txAir: u32(d, 16), uptime: u32(d, 20),
+      sentFlood: u32(d, 24), sentDirect: u32(d, 28), recvFlood: u32(d, 32), recvDirect: u32(d, 36), errEvents: u16(d, 40), snr: i16(d, 42) / 4, dupDirect: u16(d, 44), dupFlood: u16(d, 46) };
+    if (!isRoom && d.length >= 52) r.rxAir = u32(d, 48);
+    if (!isRoom && d.length >= 56) r.recvErrors = u32(d, 52);
+    return r;
+  }
+  // answer to a neighbours request: total, then entries of [key prefix][heard seconds ago u32][snr x4 i8]
+  function neighbours(d, prefixLen) {
+    if (d.length < 4) return null;
+    var total = u16(d, 0), n = u16(d, 2), list = [], o = 4;
+    for (var i = 0; i < n && o + prefixLen + 5 <= d.length; i++, o += prefixLen + 5) list.push({ key: hex(d, o, prefixLen), ago: u32(d, o + prefixLen), snr: i8(d[o + prefixLen + 4]) / 4 });
+    return { total: total, list: list };
+  }
+
+  var api = { nodeStats: nodeStats, neighbours: neighbours, CMD: CMD, RESP: RESP, PUSH: PUSH, ERR: ERR, TYPE: TYPE, FLOOD: FLOOD, enc: enc, dec: dec, hex: hex, unhex: unhex,
     clipUtf8: clipUtf8, byteLen: byteLen, MAX_TEXT: MAX_TEXT, u16: u16, u32: u32, i16: i16, i8: i8 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.MC = api;
 })(typeof self !== 'undefined' ? self : this);

@@ -9,7 +9,7 @@ internet, nothing loaded from outside the node.
 The page talks to the node over a WebSocket at `/ws`. One binary WebSocket message is one companion-protocol frame:
 the same bytes the phone apps exchange over BLE, USB or TCP port 5000, without the length header. The firmware side
 (`src/helpers/wifi/WebUiInterface.*`) is one more `BaseSerialInterface` registered in the `MultiSerialInterface`, so
-the companion code needed no changes to support it. The page's protocol code is `proto.js`.
+the companion code needed no changes to support it. The page's protocol code is `src/proto.js`.
 
 The web UI runs next to TCP port 5000 and BLE, it does not replace them.
 
@@ -53,12 +53,26 @@ env, 18.2 % of the 6.5 MB app partition) and +3.7 KB RAM. Built only, not run on
 Heltec V3, ESP32-S3:
 
 Stock `Heltec_v3_companion_radio_wifi`: 1,109,065 bytes flash, 174,704 bytes RAM. With the web UI: 1,193,417 bytes flash
-(+84 KB, 35.7 % of the app partition), 178,420 bytes RAM (+3.7 KB static). The page is 23.9 KB, 8.4 KB gzipped.
+(+84 KB, 35.7 % of the app partition), 178,420 bytes RAM (+3.7 KB static). The page is about 178 KB, 50 KB gzipped (+42 KB of flash on the V4).
+
+## What is in the page
+
+Sections (side rail on a computer, tab bar on a phone): **Channels** (list, add, join hashtag / private / public, edit,
+delete, communities, regions, replies, reactions), **Contacts** (search, filter, sort, groups, favourites, direct messages
+with delivery status and automatic retries, rooms, discovered nodes, import and share links, route reset and discovery),
+a **repeater hub** (sign in, status, neighbours, sensors, the routing features of this firmware, a console), **Tools**
+(ping, discover, radio statistics, node console, sensors) and **Settings** (name, position, radio with presets, route
+detail, privacy, automatic adding, regions, clock, GPX export, and per-browser preferences).
+
+Not in yet: the map, path trace, QR codes and camera scanning (the page is served over plain http, where browsers do not
+offer the camera or the clipboard API; copy and paste text instead), image messages, translation.
 
 ## Editing the page
 
-`index.html` and `proto.js` are the sources. After a change run `python3 scripts/gen_webui.py`, which writes
-`src/helpers/wifi/WebUiPage.h` (the gzipped page as a byte array). `gen_webui.py --check` fails if the header is stale.
+The sources are in `src/`: `index.html` (template), `style.css`, and the scripts listed in order in `scripts/gen_webui.py`
+(`proto.js` codec, `crypto.js` SHA-256/HMAC, `core.js` link and messaging engine, `ui.js` toolkit, one file per view).
+After a change run `python3 scripts/gen_webui.py`, which writes `src/helpers/wifi/WebUiPage.h` (the gzipped page as a byte
+array). `gen_webui.py --check` fails if the header is stale; `--html FILE` writes the plain page for the browser tests.
 
 ## Tests
 
@@ -66,7 +80,7 @@ Stock `Heltec_v3_companion_radio_wifi`: 1,109,065 bytes flash, 174,704 bytes RAM
   (`test/fixtures.json`) and checks every field.
 - The fixtures, and the encoder checks (frames the page sends are accepted by the stock firmware), are produced by
   `oracle/compare_webui.py` in the meshnode repo. `oracle/test_webui_e2e.py` there drives the page in a headless browser
-  against the stock companion code through a WebSocket bridge (16 checks: connect, lists, receive, send, delivery
-  confirmation, channels, hostile names, reconnect).
+  against the stock companion code through a WebSocket bridge (22 checks: connect, a long contact list, channels, search, receive,
+  send, delivery confirmation, hostile names, settings, console, statistics, reconnect).
 - Frame layouts that are newer than the hosted 1.17.1 firmware (the console, command 66) are checked against the
   source of this tree instead.

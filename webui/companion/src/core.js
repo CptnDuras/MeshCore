@@ -27,7 +27,7 @@
   var S = {
     self: null, dev: null, batt: null, contacts: {}, channels: {}, convs: {}, unread: {}, muted: {}, active: null,
     clockOff: 0, acks: {}, vars: {}, autoAdd: null, groups: {}, communities: [], regions: [], defaultRegion: '', chRegion: {},
-    chOrder: [], status: 'connecting', loading: { contacts: false, channels: false }, lastSync: 0, seen: {}
+    chOrder: [], discovered: {}, status: 'connecting', loading: { contacts: false, channels: false }, lastSync: 0, seen: {}
   };
   function nodeKey(sfx) { return 'mcw2:' + (S.self ? S.self.key.slice(0, 16) : 'x') + ':' + sfx; }
   var saveTimer = 0;
@@ -111,8 +111,8 @@
     restore(); bus.emit('self');
     setStatus('online');
     // each of these is allowed to fail without stopping the rest: the page is useful with whatever the node answers
-    var tasks = [syncClock(false), loadChannels(), loadContacts(), refreshBattery(), loadAutoAdd(), loadVars()];
-    for (var i = 0; i < tasks.length; i++) { try { await tasks[i]; } catch (e) { console.warn('startup step failed:', e.message); } if (my !== gen) return; }
+    var tasks = [function () { return syncClock(false); }, loadChannels, loadContacts, refreshBattery, loadAutoAdd, loadVars];
+    for (var i = 0; i < tasks.length; i++) { try { await tasks[i](); } catch (e) { console.warn('startup step failed:', e.message); } if (my !== gen) return; }
     await syncAll();
   }
   async function refreshBattery() { try { var b = await req(MC.enc.battery(), ['battery']); S.batt = b; bus.emit('battery'); } catch (e) { } }
@@ -175,8 +175,9 @@
     if (reactionOf(conv, who, text, m.ts)) { persist(); return; }
     var dup = (S.convs[conv] || []).some(function (x) { return !x.me && x.ts === m.ts && x.text === text && x.who === who; });
     if (dup) return;
-    var msg = addMsg(conv, Object.assign({ me: false, channel: !!m.channel, text: text, ts: m.ts, who: who, snr: m.snr, hops: m.pathLen === 255 ? -1 : m.pathLen & 63, recvAt: Math.floor(Date.now() / 1000) }, extra));
-    if (S.active !== conv || document.hidden) { S.unread[conv] = (S.unread[conv] || 0) + 1; }
+    var msg = addMsg(conv, Object.assign({ me: false, channel: !!m.channel, text: text, ts: m.ts, who: who, snr: m.snr, hops: m.pathLen === 255 ? -1 : m.pathLen & 63, cli: !m.channel && (m.kind >> 2) === 1, recvAt: Math.floor(Date.now() / 1000) }, extra));
+    if (msg.cli) { /* an answer to a command typed at a repeater: it belongs to the console, not the unread count */ }
+    else if (S.active !== conv || document.hidden) { S.unread[conv] = (S.unread[conv] || 0) + 1; }
     persist(); bus.emit('msg', { conv: conv, msg: msg, incoming: true });
   }
   // a reaction is a message of its own: "r:<4 hex of the target hash>:<2 hex emoji index>"
@@ -196,21 +197,22 @@
   // ---- push events ----
   function push(m) {
     switch (m.t) {
-      case 'contact': case 'newAdvert':
-        S.contacts[m.key] = m; S.seen[m.key] = Date.now();
-        if (m.t === 'newAdvert') bus.emit('advert', m);
-        bus.emit('contacts'); break;
+      case 'contact': S.contacts[m.key] = m; S.seen[m.key] = Date.now(); bus.emit('contacts'); break;
+      case 'newAdvert':
+        // unknown node heard: it is a contact only if the node stored it (auto-add), otherwise it waits in the discovered list
+        S.discovered[m.key] = m; S.seen[m.key] = Date.now(); bus.emit('advert', m); bus.emit('contacts');
+        setTimeout(function () { refreshContact(m.key); }, 700); break;
       case 'advert': if (S.contacts[m.key]) { S.contacts[m.key].lastAdvert = Math.floor(Date.now() / 1000); bus.emit('contacts'); } break;
       case 'pathUpdated': refreshContact(m.key); break;
       case 'msgWaiting': syncAll(); break;
       case 'delivered': onDelivered(m); break;
-      case 'contactDeleted': delete S.contacts[m.key]; bus.emit('contacts'); break;
+      case 'contactDeleted': delete S.contacts[m.key]; delete S.discovered[m.key]; bus.emit('contacts'); break;
       case 'contactsFull': UI.toast('The node\'s contact list is full', 'bad'); break;
       default: bus.emit('push', m);
     }
   }
   async function refreshContact(key) {
-    try { var c = await req(MC.enc.getContactByKey(key), ['contact']); S.contacts[c.key] = c; bus.emit('contacts'); } catch (e) { }
+    try { var c = await req(MC.enc.getContactByKey(key), ['contact']); S.contacts[c.key] = c; delete S.discovered[c.key]; bus.emit('contacts'); } catch (e) { }
   }
 
   // ---- sending ----

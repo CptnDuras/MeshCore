@@ -42,7 +42,7 @@ h1,h2,h3{margin:0;font-weight:650}
 .lhead{display:flex;align-items:center;gap:8px;padding:12px 14px 6px}
 .lhead h1{font-size:19px;flex:1}
 .tools{display:flex;gap:6px;padding:4px 14px 10px;flex-wrap:wrap}
-.search{position:relative;flex:1;min-width:140px}
+.search{position:relative;flex:1 1 100%;min-width:140px}
 .search svg{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--dim)}
 .search input{width:100%;padding:8px 10px 8px 34px;border:1px solid var(--line);border-radius:10px;background:var(--panel2)}
 select.sel,.chipsel{padding:7px 8px;border:1px solid var(--line);border-radius:10px;background:var(--panel2)}
@@ -65,7 +65,8 @@ select.sel,.chipsel{padding:7px 8px;border:1px solid var(--line);border-radius:1
 /* top bar of the detail pane */
 .dtop{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--line);min-height:58px}
 .dtop .t{flex:1;min-width:0}.dtop .t b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dtop .t small{display:block;color:var(--dim);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.back{display:none}
+.btn.back{display:none}
+[hidden]{display:none!important}
 
 /* buttons */
 .btn{display:inline-flex;align-items:center;gap:7px;padding:8px 13px;border:1px solid var(--line);border-radius:10px;background:var(--panel);cursor:pointer;line-height:1.2}
@@ -154,7 +155,7 @@ table.t{width:100%;border-collapse:collapse;font-size:14px}table.t th,table.t td
   .list{width:100%;border-right:0}
   .split .detail{display:none}
   .split.open .list{display:none}.split.open .detail{display:flex}
-  .back{display:inline-flex}
+  .btn.back{display:inline-flex}
   .bubble{max-width:86%}
   .toasts{bottom:92px}
   .page{padding:12px}

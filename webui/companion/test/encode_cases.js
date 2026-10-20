@@ -1,6 +1,6 @@
 // Prints the frames the page sends for fixed inputs, as {name: hex}, for the oracle to accept or refuse.
 'use strict';
-const MC = require('../proto.js');
+const MC = require('../src/proto.js');
 const h = (f) => Buffer.from(f).toString('hex');
 const key = '22'.repeat(32), T = 1700000200;
 console.log(JSON.stringify({

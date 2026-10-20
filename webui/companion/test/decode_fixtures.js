@@ -2,7 +2,7 @@
 // Fixtures come from the stock companion firmware run on a host (see oracle/compare_webui.py in meshnode).
 'use strict';
 const fs = require('fs'), path = require('path');
-const MC = require('../proto.js');
+const MC = require('../src/proto.js');
 const fx = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures.json'), 'utf8'));
 let bad = 0;
 for (const c of fx) {
