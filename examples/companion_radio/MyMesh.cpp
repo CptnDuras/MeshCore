@@ -1332,7 +1332,8 @@ void MyMesh::handleCmdFrame(size_t len) {
     uint32_t secs;
     memcpy(&secs, &cmd_frame[1], 4);
     uint32_t curr = getRTCClock()->getCurrentTime();
-    if (secs >= curr) {
+    // never backwards, except to correct a clock that is more than a year ahead (a wrongly set RTC, e.g. year 2072)
+    if (secs >= curr || curr - secs > 365UL * 24 * 3600) {
       getRTCClock()->setCurrentTime(secs);
       writeOKFrame();
     } else {
@@ -2166,6 +2167,27 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp, char*
 
   if (strcmp(command, "poweroff") == 0 || strcmp(command, "shutdown") == 0) {
     board.powerOff(); // doesn't return
+    return true;
+  }
+
+  if (strcmp(command, "clock") == 0) {
+    DateTime dt = DateTime(getRTCClock()->getCurrentTime());
+    sprintf(reply, "%02d:%02d - %d/%d/%d UTC", dt.hour(), dt.minute(), dt.day(), dt.month(), dt.year());
+    return true;
+  }
+  if (memcmp(command, "time ", 5) == 0) {   // set the clock to epoch seconds; unlike the app command this may go back, for a clock set far too late
+    if (sender_timestamp != 0) {   // only from the local console, never from a remote contact
+      strcpy(reply, "(ERR: console only)");
+      return true;
+    }
+    uint32_t secs = (uint32_t)strtoul(&command[5], NULL, 10);
+    if (secs < 1700000000UL) {
+      strcpy(reply, "(ERR: expected epoch seconds)");
+      return true;
+    }
+    getRTCClock()->setCurrentTime(secs);
+    DateTime dt = DateTime(getRTCClock()->getCurrentTime());
+    sprintf(reply, "OK - clock set: %02d:%02d - %d/%d/%d UTC", dt.hour(), dt.minute(), dt.day(), dt.month(), dt.year());
     return true;
   }
 
