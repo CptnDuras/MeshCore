@@ -6,7 +6,10 @@
 // not; it does not replace a site visit.
 (function (root) {
   'use strict';
-  var R_E = 6371000, K = 4 / 3, T = 256, KD = 1 / (2 * K * R_E);
+  var R_E = 6371000, T = 256;
+  // Earth radius factor as the MeshCore app computes it: 4/3 at 915 MHz, nudged by 15% of the relative frequency difference, kept within 1.1 to 1.6.
+  function kOf(fMHz) { var k = 4 / 3 * (1 + (fMHz - 915) / 915 * 0.15); return Math.max(1.1, Math.min(1.6, k)); }
+  function kdOf(fMHz) { return 1 / (2 * kOf(fMHz) * R_E); }
 
   // ---- Web Mercator pixels ----
   function mercX(lon, z) { return (lon + 180) / 360 * T * Math.pow(2, z); }
@@ -42,9 +45,12 @@
   // fetchTile(z, x, y) -> Promise<Float32Array(256*256) | null>.
   async function loadDem(bbox, fetchTile, opts) {
     opts = opts || {};
-    var maxTiles = opts.maxTiles || 72, z = opts.maxZoom || 12, r = tileRange(bbox, z);
-    while (r.n > maxTiles && z > 5) { z--; r = tileRange(bbox, z); }
-    if (r.n > maxTiles) throw new Error('That area is too large for terrain data');
+    var maxTiles = opts.maxTiles || 120, minZoom = opts.minZoom || 7, z = opts.maxZoom || 12, r = tileRange(bbox, z);
+    while (r.n > maxTiles && z > minZoom) { z--; r = tileRange(bbox, z); }
+    if (r.n > maxTiles) {
+      var km = Math.round(haversine({ lat: bbox.north, lon: bbox.west }, { lat: bbox.north, lon: bbox.east }) / 1000);
+      throw new Error('The area is ' + km + ' km wide, more than the planner can load terrain for at once (about ' + Math.round(km * Math.sqrt(maxTiles / r.n)) + ' km). Zoom the map in, or lower the range.');
+    }
     var w = (r.x1 - r.x0 + 1) * T, h = (r.y1 - r.y0 + 1) * T, dem = { z: z, x0: r.x0 * T, y0: r.y0 * T, w: w, h: h, data: new Float32Array(w * h) };
     var jobs = [], done = 0, n = Math.pow(2, z);
     for (var ty = Math.max(0, r.y0); ty <= Math.min(n - 1, r.y1); ty++) for (var tx = r.x0; tx <= r.x1; tx++) jobs.push([tx, ty]);
@@ -95,9 +101,12 @@
   // Path loss in dB from a site to every grid cell within p.rangeM, by walking outward along many directions. At each step the
   // most obstructing ground point passed so far (steepest slope seen from the antenna, earth curvature included) is the one
   // knife edge on the path. Cells never reached hold Infinity.
-  function lossMap(dem, grid, site, p, out) {
-    var z = dem.z, sx = mercX(site.lon, z), sy = mercY(site.lat, z), mpp = mPerPx(site.lat, z), e0 = elevPx(dem, sx, sy);
+  // If `clear` (a Uint8Array) is given, a cell is set to 1 when a straight line from the antenna to a handheld there passes the
+  // ground with room to spare: 0 m, as in the MeshCore app, or p.fresnel (0 to 1) of the first Fresnel zone radius.
+  function lossMap(dem, grid, site, p, out, clear) {
+    var z = dem.z, sx = mercX(site.lon, z), sy = mercY(site.lat, z), mpp = mPerPx(site.lat, z), e0 = elevPx(dem, sx, sy), KD = kdOf(p.fMHz), thr = (p.fresnel || 0) * Math.SQRT2;
     var loss = out || new Float32Array(grid.cols * grid.rows); loss.fill(Infinity);
+    if (clear) clear.fill(0);
     if (isNaN(e0)) return loss;
     var hT = e0 + site.h, lam = 299.792458 / p.fMHz, step = grid.cp / 2, maxI = Math.max(1, Math.floor(p.rangeM / mpp / step));
     var nAz = Math.max(90, Math.ceil(1.5 * 2 * Math.PI * maxI * step / grid.cp)), clutter = p.clutter || 0, fc = 20 * Math.log10(p.fMHz) + 32.45;
@@ -107,12 +116,16 @@
         var px = sx + ux * i, py = sy + uy * i, e = elevPx(dem, px, py);
         if (e !== e) break;
         var d = i * step * mpp, ep = e - d * d * KD, l = fc + 20 * Math.log10(d / 1000) + clutter;
+        var open = true;
         if (bestD > 0) {
           var rx = ep + p.rxH, line = hT + (rx - hT) * bestD / d, v = (bestH - line) * Math.sqrt(2 * d / (lam * bestD * (d - bestD)));
           if (v > -0.78) { var t = v - 0.1; l += 6.9 + 20 * Math.log10(Math.sqrt(t * t + 1) + t); }
+          open = v <= -thr;
         }
         var cx = Math.floor((px - grid.x0) / grid.cp), cy = Math.floor((py - grid.y0) / grid.cp);
-        if (cx >= 0 && cy >= 0 && cx < grid.cols && cy < grid.rows) { var idx = cy * grid.cols + cx; if (l < loss[idx]) loss[idx] = l; }
+        if (cx >= 0 && cy >= 0 && cx < grid.cols && cy < grid.rows) {
+          var idx = cy * grid.cols + cx; if (l < loss[idx]) loss[idx] = l; if (clear && open) clear[idx] = 1;
+        }
         var slope = (ep - hT) / d;
         if (slope > bestSlope) { bestSlope = slope; bestD = d; bestH = ep; }
       }
@@ -122,7 +135,7 @@
 
   // One link between two sites: loss from the worst obstruction along the whole path, and the profile for drawing it.
   function linkProfile(dem, a, b, p) {
-    var z = dem.z, ax = mercX(a.lon, z), ay = mercY(a.lat, z), bx = mercX(b.lon, z), by = mercY(b.lat, z);
+    var z = dem.z, ax = mercX(a.lon, z), ay = mercY(a.lat, z), bx = mercX(b.lon, z), by = mercY(b.lat, z), KD = kdOf(p.fMHz);
     var mpp = mPerPx((a.lat + b.lat) / 2, z), D = Math.hypot(bx - ax, by - ay) * mpp, lam = 299.792458 / p.fMHz;
     var ea = elevPx(dem, ax, ay), eb = elevPx(dem, bx, by);
     if (isNaN(ea) || isNaN(eb) || D < 1) return null;
@@ -136,19 +149,23 @@
       var r1 = i && i < n ? Math.sqrt(lam * d * (D - d) / D) : 0; fresnel.push(r1);
       if (i && i < n) { var v = (g - ln) * Math.sqrt(2 * D / (lam * d * (D - d))); if (v > maxV) { maxV = v; at = i; } }
     }
-    var l = fspl(D / 1000, p.fMHz) + (maxV > -Infinity ? edgeLoss(maxV) : 0) + (p.linkClutter || 0);
-    return { km: D / 1000, loss: l, nu: maxV, blockedAt: at / n, dist: dist, ground: ground, los: los, fresnel: fresnel };
+    var l = fspl(D / 1000, p.fMHz) + (maxV > -Infinity ? edgeLoss(maxV) : 0) + (p.linkClutter || 0), worst = 0, worstAt = 0;
+    for (var q = 1; q < n; q++) { var over = ground[q] - los[q]; if (over > worst) { worst = over; worstAt = q; } }
+    return { km: D / 1000, loss: l, nu: maxV, blockedAt: at / n, dist: dist, ground: ground, los: los, fresnel: fresnel,
+      clear: maxV <= -(p.fresnel || 0) * Math.SQRT2, blockedBy: worst, blockedKm: dist[worstAt] / 1000, k: kOf(p.fMHz) };
   }
+  // ok: the budget closes and, unless p.losOnly is false, the path is clear.
   function linkMargin(dem, a, b, p) {
     var pr = linkProfile(dem, a, b, p); if (!pr) return null;
-    var pw = Math.min(a.dbm, b.dbm) - (a.cable || 0) - (b.cable || 0) + a.gain + b.gain - sensitivityDbm(p.sf, p.bwKHz);
-    pr.margin = pw - pr.loss; return pr;
+    var pw = Math.min(a.dbm, b.dbm) - (a.cable || 0) - (b.cable || 0) + a.gain + b.gain - sensitivityDbm(p.sf, p.bwKHz) - (p.noise || 0);
+    pr.margin = pw - pr.loss; pr.ok = pr.margin >= 0 && (p.losOnly === false || pr.clear); return pr;
   }
 
-  // Margin map: dB above the limit, for one site (Infinity loss becomes -Infinity).
+  // Margin map: dB above the limit, for one site. Cells it does not reach, and (unless p.losOnly is false) cells without a clear line
+  // of sight, hold -Infinity.
   function marginMap(dem, grid, site, p, out) {
-    var loss = lossMap(dem, grid, site, p, out), bud = budget(site, p);
-    for (var i = 0; i < loss.length; i++) loss[i] = bud - loss[i];
+    var N = grid.cols * grid.rows, clear = p.losOnly === false ? null : new Uint8Array(N), loss = lossMap(dem, grid, site, p, out, clear), bud = budget(site, p) - (p.noise || 0);
+    for (var i = 0; i < N; i++) loss[i] = clear && !clear[i] ? -Infinity : bud - loss[i];
     return loss;
   }
 
@@ -214,11 +231,10 @@
         if (!ctx.requireLink || !network.length) { chosen = order[o]; break; }
         var bestLink = null, bestWith = null;
         network.forEach(function (r) {
-          if (haversine(r, order[o].site) > (p.rangeM || 20000) * 2.5) return;
           var lm = linkMargin(dem, order[o].site, r, p);
-          if (lm && (!bestLink || lm.margin > bestLink.margin)) { bestLink = lm; bestWith = r; }
+          if (lm && lm.ok && (!bestLink || lm.margin > bestLink.margin)) { bestLink = lm; bestWith = r; }
         });
-        if (bestLink && bestLink.margin >= 0) { chosen = order[o]; link = { with: bestWith, margin: bestLink.margin, km: bestLink.km }; }
+        if (bestLink) { chosen = order[o]; link = { with: bestWith, margin: bestLink.margin, km: bestLink.km }; }
       }
       if (!chosen) break;
       chosen.used = true;
@@ -233,7 +249,7 @@
     return result;
   }
 
-  var api = { mercX: mercX, mercY: mercY, lonOf: lonOf, latOf: latOf, mPerPx: mPerPx, haversine: haversine, elevPx: elevPx, elevAt: elevAt, terrariumHeight: terrariumHeight,
+  var api = { kOf: kOf, mercX: mercX, mercY: mercY, lonOf: lonOf, latOf: latOf, mPerPx: mPerPx, haversine: haversine, elevPx: elevPx, elevAt: elevAt, terrariumHeight: terrariumHeight,
     loadDem: loadDem, tileRange: tileRange, sensitivityDbm: sensitivityDbm, fspl: fspl, edgeLoss: edgeLoss, budget: budget, makeGrid: makeGrid, cellOf: cellOf,
     cellCentre: cellCentre, cellKm2: cellKm2, lossMap: lossMap, marginMap: marginMap, linkProfile: linkProfile, linkMargin: linkMargin, candidates: candidates, plan: plan };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Geo = api;

@@ -30,6 +30,24 @@ ok('sensitivity SF8/62.5 is near -130 dBm', Math.abs(G.sensitivityDbm(8, 62.5) +
   ok('ridge shadows the far side', far > freeFar + 10, [far, freeFar]);
   ok('near side is unaffected', Math.abs(near - G.fspl(2.5, p.fMHz)) < 1.5, near);
 }
+// line of sight, as the MeshCore app judges it: the far side of a ridge is not covered, the near side is, and diffraction mode keeps the far side
+{
+  const ridgeX = 4000 / mpp, dem = mk((i, j) => 100 + (Math.abs(i - ridgeX) < 6 ? 250 : 0)), grid = G.makeGrid(dem, 4);
+  const at = (m) => G.cellOf(grid, lat0, G.lonOf(G.mercX(lon0, z) + m / mpp, z));
+  const los = G.marginMap(dem, grid, site, Object.assign({}, p, { losOnly: true })), diff = G.marginMap(dem, grid, site, Object.assign({}, p, { losOnly: false }));
+  ok('line of sight mode: near side covered', los[at(2500)] > 6, los[at(2500)]);
+  ok('line of sight mode: far side of the ridge is not covered', los[at(7000)] === -Infinity, los[at(7000)]);
+  ok('diffraction mode still gives the far side a margin', diff[at(7000)] > -Infinity && diff[at(7000)] < los[at(2500)], diff[at(7000)]);
+  const noisy = G.marginMap(dem, grid, site, Object.assign({}, p, { losOnly: true, noise: 10 }));
+  ok('noise lowers the margin by that much', Math.abs(los[at(2500)] - noisy[at(2500)] - 10) < 0.01, [los[at(2500)], noisy[at(2500)]]);
+  const a = { lat: lat0, lon: lon0, h: 10, dbm: 22, gain: 3, cable: 0 }, b = { lat: lat0, lon: G.lonOf(G.mercX(lon0, z) + 7000 / mpp, z), h: 10, dbm: 22, gain: 3, cable: 0 };
+  const lm = G.linkMargin(dem, a, b, Object.assign({}, p, { losOnly: true }));
+  ok('a link over the ridge is blocked and says by how much', !lm.clear && !lm.ok && lm.blockedBy > 100 && Math.abs(lm.blockedKm - 4) < 0.5, [lm.clear, lm.blockedBy, lm.blockedKm]);
+  ok('the same link passes in diffraction mode if the budget closes', G.linkMargin(dem, a, b, Object.assign({}, p, { losOnly: false })).ok);
+}
+// the earth radius factor follows the app: 4/3 at 915 MHz, slightly different elsewhere, within 1.1 to 1.6
+ok('k factor is 4/3 at 915 MHz', Math.abs(G.kOf(915) - 4 / 3) < 1e-9);
+ok('k factor stays within bounds', G.kOf(100) >= 1.1 && G.kOf(5000) <= 1.6);
 // earth curvature: far over flat ground the loss climbs above free space beyond the radio horizon
 {
   const dem = mk(() => 0), grid = G.makeGrid(dem, 4), pp = Object.assign({}, p, { rangeM: 14000 }), low = Object.assign({}, site, { h: 2 });
@@ -67,5 +85,10 @@ ok('sensitivity SF8/62.5 is near -130 dBm', Math.abs(G.sensitivityDbm(8, 62.5) +
   const d3 = await G.loadDem({ west: -114, east: -110, south: 35, north: 39 }, fetchTile, { maxTiles: 72 });
   ok('a big area falls back to a coarser zoom', d3.z < 12, d3.z);
   ok('Terrarium decode', G.terrariumHeight(128, 10, 128) === 10.5, G.terrariumHeight(128, 10, 128));
+  // a long reach (200 km across) loads at a coarser zoom instead of failing; a continent is refused with the size in the message
+  const bb = { south: 36.1, north: 37.9, west: -113.1, east: -110.9 }, d4 = await G.loadDem(bb, async () => new Float32Array(65536));
+  ok('a 200 km box loads at a coarser zoom', d4.z >= 7 && d4.z < 12, d4.z);
+  let msg = ''; try { await G.loadDem({ south: -60, north: 60, west: -170, east: 170 }, async () => null); } catch (e) { msg = e.message; }
+  ok('a continent is refused with the size in the message', /km wide/.test(msg), msg);
   console.log(bad ? bad + ' failed' : 'all passed'); process.exit(bad ? 1 : 0);
 })();

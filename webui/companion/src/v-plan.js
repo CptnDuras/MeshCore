@@ -6,8 +6,8 @@
 
   var ENV = [['0', 'Open country'], ['6', 'Light trees or houses'], ['12', 'Suburbs'], ['18', 'Dense trees or city']];
   var DEFAULTS = {
-    freq: 910.525, bw: 62.5, sf: 8, repDbm: 22, repGain: 3, repH: 10, cable: 1, cliDbm: 20, cliGain: 0, cliH: 2, env: '6', fade: 10, range: 15, count: 3,
-    link: true
+    freq: 910.525, bw: 62.5, sf: 8, repDbm: 22, repGain: 3, repH: 10, cable: 1, cliDbm: 20, cliGain: 0, cliH: 2, env: '6', fade: 10, noise: 6, range: 40, count: 3,
+    link: true, losOnly: 'true', fresnel: '0'
   };
   var saved = W.store.get('mcw2:plan', null) || {};
   var P = Object.assign({}, DEFAULTS, saved.p || {}), mine = saved.sites || [], off = saved.off || {}, heights = saved.heights || {};
@@ -24,7 +24,7 @@
   function asSite(s) { return { lat: s.lat, lon: s.lon, h: +siteH(s), dbm: +P.repDbm, gain: +P.repGain, cable: +P.cable, name: s.name }; }
   function active() { return allSites().filter(function (s) { return !off[s.id]; }); }
   function params() {
-    return { fMHz: +P.freq, sf: +P.sf, bwKHz: +P.bw, clientDbm: +P.cliDbm, clientGain: +P.cliGain, rxH: +P.cliH, clutter: +P.env, fade: +P.fade, rangeM: +P.range * 1000, linkClutter: 0 };
+    return { fMHz: +P.freq, sf: +P.sf, bwKHz: +P.bw, clientDbm: +P.cliDbm, clientGain: +P.cliGain, rxH: +P.cliH, clutter: +P.env, fade: +P.fade, noise: +P.noise, rangeM: +P.range * 1000, linkClutter: 0, losOnly: P.losOnly !== 'false', fresnel: +P.fresnel };
   }
   function fmtKm(km) { return W.settings.units === 'imperial' ? (km / 1.609344).toFixed(1) + ' mi' : km.toFixed(1) + ' km'; }
   function fmtArea(km2) { return W.settings.units === 'imperial' ? (km2 / 2.58999).toFixed(0) + ' sq mi' : km2.toFixed(0) + ' km²'; }
@@ -106,7 +106,6 @@
     busy = true; resultsEl.textContent = ''; say('Loading terrain…');
     try {
       var dem = await G.loadDem(bbox, fetchTile, { onProgress: function (a, b) { say('Loading terrain… ' + a + ' of ' + b + ' tiles'); } });
-      if (dem.z < 10) throw new Error('That area is too large. Zoom in, or lower the range.');
       var live = 0, total = 0; for (var i = 0; i < dem.data.length; i += 997) { total++; if (dem.data[i] === dem.data[i]) live++; }
       if (live < total * 0.5) throw new Error('No terrain data came back. The planner needs the internet for it.');
       var cp = Math.max(1, Math.round(120 / G.mPerPx(mid, dem.z))), grid = G.makeGrid(dem, cp);
@@ -115,7 +114,9 @@
         repeater: { h: +P.repH, dbm: +P.repDbm, gain: +P.repGain, cable: +P.cable }, onProgress: function (t, f) { say(t + ' · ' + Math.round(f * 100) + '%'); } });
       run = { grid: grid, dem: dem, margin: res.margin, picks: res.picks, p: p, sites: sites.map(asSite) };
       var cov = 0; for (var k = 0; k < res.covered.length; k++) cov += res.covered[k];
-      say('Existing repeaters cover about ' + fmtArea(cov * G.cellKm2(grid, mid)) + (count ? '. ' + res.picks.length + ' site' + (res.picks.length === 1 ? '' : 's') + ' suggested.' : '.'));
+      var res_m = grid.cp * G.mPerPx(mid, dem.z);
+      say('Existing repeaters cover about ' + fmtArea(cov * G.cellKm2(grid, mid)) + (count ? '. ' + res.picks.length + ' site' + (res.picks.length === 1 ? '' : 's') + ' suggested.' : '.') +
+        (res_m > 250 ? ' The area is large, so terrain is sampled every ' + fmtM(res_m) + ' and small hills are missed. Zoom in for detail.' : ''));
       paint(); markers(); listPicks();
       if (count && !res.picks.length) resultsEl.appendChild(el('p', { class: 'dim', text: 'No place in view adds coverage and can reach a repeater. Move the map, lower the signal margin, or turn off "must reach a repeater".' }));
     } catch (e) { say(''); UI.toast(e.message, 'bad'); }
@@ -246,8 +247,10 @@
     pr.dist.forEach(function (d, i) { g.lineTo(X(d), Y(pr.ground[i])); });
     g.lineTo(X(pr.dist[pr.dist.length - 1]), 240); g.closePath(); g.fill();
     g.strokeStyle = '#d6342a'; g.lineWidth = 1.5; g.beginPath(); pr.dist.forEach(function (d, i) { g[i ? 'lineTo' : 'moveTo'](X(d), Y(pr.los[i])); }); g.stroke();
-    var body = el('div', {}, [cv, el('p', { text: fmtKm(pr.km) + ' · path loss ' + pr.loss.toFixed(0) + ' dB · ' + (pr.margin >= 0 ? Math.round(pr.margin) + ' dB to spare' : Math.round(-pr.margin) + ' dB short') +
-      (pr.nu > -0.78 ? ' · terrain gets within the first Fresnel zone ' + Math.round(pr.blockedAt * 100) + '% of the way along' : ' · clear line of sight') }),
+    var sight = pr.blockedBy > 0 ? 'Line of sight blocked by ' + fmtM(pr.blockedBy) + ' of ground ' + fmtKm(pr.blockedKm) + ' from ' + (a.name || 'the first site')
+      : pr.nu > -0.78 ? 'Line of sight is clear, but terrain gets within the first Fresnel zone ' + Math.round(pr.blockedAt * 100) + '% of the way along' : 'Line of sight is clear';
+    var body = el('div', {}, [cv, el('p', { text: sight + ' (earth radius factor ' + pr.k.toFixed(2) + ').' }),
+      el('p', { text: fmtKm(pr.km) + ' · path loss ' + pr.loss.toFixed(0) + ' dB · ' + (pr.margin >= 0 ? Math.round(pr.margin) + ' dB to spare' : Math.round(-pr.margin) + ' dB short') }),
       el('p', { class: 'dim', text: 'Red is the straight line between the antennas, blue the zone that should stay clear, brown the ground (raised by earth curvature).' })]);
     UI.alert((a.name || 'Site') + ' to ' + (b.name || 'site'), body);
   }
@@ -307,12 +310,16 @@
         el('div', { class: 'card' }, [el('b', { text: 'Radio' }), el('div', { class: 'pgrid' }, [
           field('Frequency (MHz)', 'freq'), field('Bandwidth (kHz)', 'bw', { options: [[7.8, '7.8'], [10.4, '10.4'], [15.6, '15.6'], [20.8, '20.8'], [31.25, '31.25'], [41.7, '41.7'], [62.5, '62.5'], [125, '125'], [250, '250'], [500, '500']] }),
           field('Spreading factor', 'sf', { options: [5, 6, 7, 8, 9, 10, 11, 12].map(function (n) { return [n, 'SF' + n]; }) }),
-          field('Required margin (dB)', 'fade', { min: 0, max: 30 })]), fromNode]),
+          field('Required margin (dB)', 'fade', { min: 0, max: 30 }), field('Noise and interference (dB)', 'noise', { min: 0, max: 30 })]), fromNode]),
+        el('div', { class: 'card' }, [el('b', { text: 'What counts as covered' }), el('div', { class: 'pgrid' }, [
+          field('Path', 'losOnly', { options: [['true', 'Clear line of sight (like the MeshCore app)'], ['false', 'Also paths over a ridge (diffraction)']] }),
+          field('Clearance', 'fresnel', { options: [['0', 'Ground below the straight line'], ['0.6', '60% of the Fresnel zone clear']] })]),
+          el('p', { class: 'dim', style: 'font-size:12px', text: 'The MeshCore app checks whether the straight line between two antennas clears the ground, allowing for the earth\'s curve. This does the same for every point around each repeater, and also requires the signal to be strong enough.' })]),
         el('div', { class: 'card' }, [el('b', { text: 'Repeater antennas' }), el('div', { class: 'pgrid' }, [
           field('Power (dBm)', 'repDbm', { min: 0, max: 30 }), field('Antenna gain (dBi)', 'repGain', { min: -5, max: 20 }), field('Height (m)', 'repH', { min: 1, max: 100 }), field('Cable loss (dB)', 'cable', { min: 0, max: 10 })])]),
         el('div', { class: 'card' }, [el('b', { text: 'Handheld radios and surroundings' }), el('div', { class: 'pgrid' }, [
           field('Power (dBm)', 'cliDbm', { min: 0, max: 30 }), field('Antenna gain (dBi)', 'cliGain', { min: -5, max: 10 }), field('Height (m)', 'cliH', { min: 0.5, max: 20 }),
-          field('Surroundings', 'env', { options: ENV }), field('Range (km)', 'range', { min: 2, max: 40 })])]),
+          field('Surroundings', 'env', { options: ENV }), field('Range (km)', 'range', { min: 2, max: 300 })])]),
         el('div', { class: 'btnrow' }, [UI.btn('Estimate coverage', { kind: 'primary', onclick: function () { go(0); } }),
           UI.btn('Find sites', { onclick: function () { go(+count.value); } }), el('label', { class: 'pf inline' }, [el('span', { text: 'up to' }), count]),
           UI.btn('Check a link', { onclick: checkLink })]),
