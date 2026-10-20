@@ -30,7 +30,7 @@ class AsyncAuthenticationMiddleware;
   #define WEBUI_PORT 80
 #endif
 #ifndef WEBUI_MAX_CLIENTS
-  #define WEBUI_MAX_CLIENTS 2
+  #define WEBUI_MAX_CLIENTS 3
 #endif
 #ifndef WEBUI_USER
   #define WEBUI_USER "admin"

@@ -85,14 +85,20 @@
     ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
     ws.binaryType = 'arraybuffer';
     ws.onopen = function () {
-      retryMs = 1000;
-      init(my).catch(function (e) { if (my === gen) { setStatus('error', 'Setup failed: ' + e.message); try { ws.close(); } catch (x) { } } });
+      // the wait before the next attempt is only reset once setup has worked; a node that accepts the connection and then fails must not be hammered
+      init(my).then(function () { if (my === gen) retryMs = 1000; }).catch(function (e) {
+        if (my === gen) { console.warn('setup failed:', e.message); setStatus('error', 'Setup failed: ' + e.message); try { ws.close(); } catch (x) { } }
+      });
     };
     ws.onmessage = function (ev) { if (my === gen) onFrame(MC.dec(new Uint8Array(ev.data))); };
-    ws.onclose = function () {
+    ws.onclose = function (ev) {
       if (my !== gen) return;
-      setStatus('offline'); if (cur) done(null, 'connection closed');
+      console.info('connection closed: code ' + ev.code + (ev.reason ? ' (' + ev.reason + ')' : ''));
+      if (cur) done(null, 'connection closed');
       while (queue.length) queue.shift().rej(new Error('connection closed'));
+      // 4001: the node let a newer page in and dropped this one. Reconnecting would only drop that page in turn.
+      if (ev.code === 4001) { stopped = true; setStatus('replaced'); return; }
+      setStatus('offline');
       setTimeout(connect, retryMs); retryMs = Math.min(retryMs * 2, 15000);
     };
   }

@@ -9,8 +9,13 @@
   async function run(req, fetchTile, onProgress, opts) {
     opts = opts || {};
     var p = Object.assign({}, req.p), sites = req.sites, count = req.count | 0, vb = req.view, say = onProgress || function () {};
-    var reachKm = +req.reachKm > 0 ? Math.min(300, +req.reachKm) : G.reachKm(req.repeater, p), rangeDeg = reachKm / 111;
+    var wanted = +req.reachKm > 0 ? Math.min(300, +req.reachKm) : G.reachKm(req.repeater, p), reachKm = Math.min(wanted, opts.maxReachKm || 300), rangeDeg = reachKm / 111;
     p.rangeM = reachKm * 1000;
+    // Only repeaters whose coverage could reach the map view count; one across the country would make the area to load enormous.
+    var vmid = (vb.north + vb.south) / 2, padLon = rangeDeg / Math.max(0.2, Math.cos(vmid * Math.PI / 180)), total0 = sites.length;
+    sites = sites.filter(function (s) { return s.lat >= vb.south - rangeDeg && s.lat <= vb.north + rangeDeg && s.lon >= vb.west - padLon && s.lon <= vb.east + padLon; });
+    var skipped = total0 - sites.length;
+    if (!sites.length && !count) throw new Error(total0 ? 'None of the sites are within ' + Math.round(reachKm) + ' km of the map view. Pan the map to your repeaters.' : 'Add a site first');
     var pts = sites.map(function (s) { return { lat: s.lat, lon: s.lon }; });
     if (count) pts.push({ lat: vb.north, lon: vb.west }, { lat: vb.south, lon: vb.east });
     if (!pts.length) throw new Error('Add a site first');
@@ -24,15 +29,15 @@
     var cp = Math.max(1, Math.round((opts.cellM || 120) / G.mPerPx(mid, dem.z))), grid = G.makeGrid(dem, cp);
     var nodes = req.nodes || [];
     // opts.makePool(dem, grid, p) -> { evalCandidates(sites, onDone) -> Promise<Uint32Array[]>, close() } spreads the candidate sites over several processors
-    var pool = opts.makePool && count ? opts.makePool(dem, grid, p) : null, res;
+    var pool = opts.makePool && (count || sites.length > 1) ? opts.makePool(dem, grid, p) : null, res;
     try {
       res = await G.plan({ dem: dem, grid: grid, p: p, existing: sites, count: count, area: vb, requireLink: req.link, nodes: nodes, repeater: req.repeater,
-        maxCandidates: opts.maxCandidates, evalCandidates: pool && pool.evalCandidates, onProgress: function (t, f) { say(t, f); } });
+        maxCandidates: opts.maxCandidates, pool: pool, onProgress: function (t, f) { say(t, f); } });
     } finally { if (pool) pool.close(); }
     var cov = 0; for (var k = 0; k < res.covered.length; k++) cov += res.covered[k];
     var inside = [], outside = [];
     nodes.forEach(function (n) { var c = G.cellOf(grid, n.lat, n.lon); if (c < 0) return; (res.margin[c] >= p.fade ? inside : outside).push(n.name || ''); });
-    return { dem: dem, grid: grid, p: p, mid: mid, reachKm: reachKm, resM: grid.cp * G.mPerPx(mid, dem.z), covKm2: cov * G.cellKm2(grid, mid), margin: res.margin, picks: res.picks,
+    return { dem: dem, grid: grid, p: p, mid: mid, reachKm: reachKm, capped: wanted > reachKm, skipped: skipped, used: sites.length, resM: grid.cp * G.mPerPx(mid, dem.z), covKm2: cov * G.cellKm2(grid, mid), margin: res.margin, picks: res.picks,
       heard: { inside: inside, outside: outside } };
   }
 
@@ -53,7 +58,7 @@
   function pack(r) {
     var m = new Int8Array(r.margin.length);
     for (var i = 0; i < m.length; i++) { var v = r.margin[i]; m[i] = v === v && v > -127 ? Math.min(127, Math.round(v)) : -128; }
-    return { grid: r.grid, z: r.dem.z, p: r.p, reachKm: r.reachKm, resM: r.resM, covKm2: r.covKm2, mid: r.mid, heard: r.heard, margin: gz(m),
+    return { grid: r.grid, z: r.dem.z, p: r.p, reachKm: r.reachKm, capped: r.capped, skipped: r.skipped, used: r.used, resM: r.resM, covKm2: r.covKm2, mid: r.mid, heard: r.heard, margin: gz(m),
       picks: r.picks.map(function (q) { return { lat: q.lat, lon: q.lon, elev: q.elev, h: q.h, newKm2: q.newKm2, newNodes: q.newNodes, site: q.site, link: q.link, cells: gz(q.cells) }; }) };
   }
   async function gunzip(b64) {
@@ -66,7 +71,7 @@
     for (var i = 0; i < m8.length; i++) margin[i] = m8[i] === -128 ? -Infinity : m8[i];
     var picks = [];
     for (var k = 0; k < w.picks.length; k++) { var q = w.picks[k], u = await gunzip(q.cells); picks.push(Object.assign({}, q, { cells: new Uint32Array(u.buffer, u.byteOffset, u.byteLength >> 2) })); }
-    return { dem: null, grid: w.grid, p: w.p, mid: w.mid, reachKm: w.reachKm, resM: w.resM, covKm2: w.covKm2, margin: margin, picks: picks, heard: w.heard };
+    return { dem: null, grid: w.grid, p: w.p, mid: w.mid, reachKm: w.reachKm, capped: w.capped, skipped: w.skipped, used: w.used, resM: w.resM, covKm2: w.covKm2, margin: margin, picks: picks, heard: w.heard };
   }
 
   var api = { run: run, link: link, pack: pack, unpack: unpack };

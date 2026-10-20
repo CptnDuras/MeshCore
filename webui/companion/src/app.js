@@ -45,6 +45,7 @@
     if (S.status === 'connecting') txt = 'Connecting to the node…';
     else if (S.status === 'offline') { txt = 'Connection lost. Reconnecting…'; cls = 'bad'; }
     else if (S.status === 'error') { txt = S.statusText + '. Reconnecting…'; cls = 'bad'; }
+    else if (S.status === 'replaced') { txt = 'Another page took over this node (it allows ' + 3 + ' at a time). Reload this page to use it here.'; cls = 'bad'; }
     banner.className = txt ? 'show ' + cls : ''; banner.id = 'banner'; banner.textContent = txt;
   }
 

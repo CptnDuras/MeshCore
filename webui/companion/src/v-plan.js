@@ -63,7 +63,11 @@
 
   // Where the work happens. On the node's page the browser does it; the planner service replaces this with calls to its Lambda (setBackend).
   var backend = {
-    run: function (req, onProgress) { return root.Planrun.run(req, fetchTile, onProgress); },
+    run: function (req, onProgress) {
+      // the repeaters are spread over Web Workers (one fewer than the processors, at most 6); a long reach is capped here, the full planner has no such cap
+      var threads = Math.max(2, Math.min(6, (navigator.hardwareConcurrency || 4) - 1));
+      return root.Planrun.run(req, fetchTile, onProgress, { maxTiles: 200, maxReachKm: 120, makePool: root.PoolWeb ? root.PoolWeb.make(threads) : null });
+    },
     link: function (req) { return root.Planrun.link(req, fetchTile); }
   };
 
@@ -112,8 +116,9 @@
     try {
       var r = await backend.run(req, function (t, f) { say(t + (f ? ' · ' + Math.round(f * 100) + '%' : '')); });
       run = { grid: r.grid, margin: r.margin, picks: r.picks, p: r.p, sites: req.sites };
-      say('Existing repeaters cover about ' + fmtArea(r.covKm2) + (count ? '. ' + r.picks.length + ' site' + (r.picks.length === 1 ? '' : 's') + ' suggested.' : '.') +
+      say(r.used + ' repeater' + (r.used === 1 ? '' : 's') + (r.skipped ? ' (' + r.skipped + ' too far from the map view were left out)' : '') + ' cover about ' + fmtArea(r.covKm2) + (count ? '. ' + r.picks.length + ' site' + (r.picks.length === 1 ? '' : 's') + ' suggested.' : '.') +
         ' Reach used: ' + fmtKm(r.reachKm) + (+P.reach > 0 ? '' : ' (from the signal budget)') + '.' +
+        (r.capped ? ' This page stops at ' + fmtKm(r.reachKm) + '; the full planner on xerokuhl.com goes further.' : '') +
         (r.resM > 250 ? ' The area is large, so terrain is sampled every ' + fmtM(r.resM) + ' and small hills are missed. Zoom in for detail.' : ''));
       paint(); markers(); listPicks(); heardCheck(r.heard);
       if (count && !r.picks.length) resultsEl.appendChild(el('p', { class: 'dim', text: 'No place in view adds coverage and can reach a repeater. Move the map, lower the signal margin, or turn off "must reach a repeater".' }));
@@ -331,7 +336,9 @@
       panel.appendChild(el('div', { class: 'dtop' }, [el('h1', { text: 'Repeater planner', style: 'font-size:19px' })]));
       panel.appendChild(el('div', { class: 'pbody' }, [
         el('p', { class: 'dim', text: 'Shows where your repeaters should be heard and where a new one would add the most coverage. It is an estimate from terrain and a radio model; check a site on the ground before you build.' }),
-        el('div', { class: 'card' }, [el('div', { class: 'ctitle' }, [el('b', { text: 'Sites' }), addBtn]), sitesEl,
+        el('div', { class: 'card' }, [el('div', { class: 'ctitle' }, [el('b', { text: 'Sites' }), el('span', { class: 'btnrow' }, [
+            UI.btn('All', { kind: 'small', title: 'Use every site', onclick: function () { allSites().forEach(function (s) { delete off[s.id]; }); persist(); refresh(); } }),
+            UI.btn('None', { kind: 'small', title: 'Leave every site out', onclick: function () { allSites().forEach(function (s) { off[s.id] = true; }); persist(); refresh(); } }), addBtn])]), sitesEl,
           el('div', { class: 'btnrow' }, [UI.btn('Export plan', { icon: 'download', kind: 'small', title: 'Save the sites and radio settings as a JSON file', onclick: exportPlan }),
             UI.btn('Import plan', { kind: 'small', title: 'Load sites and settings from a plan file', onclick: importPlan }),
             UI.btn('Save map picture', { icon: 'download', kind: 'small', title: 'Save the map with the coverage as a PNG', onclick: exportPng }),

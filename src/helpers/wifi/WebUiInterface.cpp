@@ -116,7 +116,11 @@ void WebUiInterface::onEvent(AsyncWebSocketClient* client, int type, void* arg, 
   switch ((AwsEventType)type) {
     case WS_EVT_CONNECT:
       if (_ws->count() > WEBUI_MAX_CLIENTS) {
-        client->close(1013);   // try again later
+        // Make room by dropping the page that has been connected longest, never the new one. It is told (4001) not to
+        // reconnect by itself: pages that reconnect on their own would keep replacing each other for as long as three are open.
+        for (auto& c : _ws->getClients()) {
+          if (c.id() != client->id() && c.status() == WS_CONNECTED) { _ws->close(c.id(), 4001, "replaced"); break; }
+        }
       }
       _clients = _ws->count();
       break;
@@ -181,7 +185,7 @@ void WebUiInterface::loop() {
     }
   }
   if (!_ws) return;
-  _ws->cleanupClients(WEBUI_MAX_CLIENTS);
+  _ws->cleanupClients(0xFFFF);   // only frees clients that have gone; making room for a new page is done when it connects
   _clients = _ws->count();
   if (_clients == 0) {
     _send_len = 0;   // nobody to tell

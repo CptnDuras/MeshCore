@@ -6,6 +6,9 @@
 // not; it does not replace a site visit.
 (function (root) {
   'use strict';
+  // The whole module is a function so its text can be handed to a Web Worker (api.factorySource) and run there.
+  function factory() {
+  'use strict';
   var R_E = 6371000, T = 256;
   // Earth radius factor as the MeshCore app computes it: 4/3 at 915 MHz, nudged by 15% of the relative frequency difference, kept within 1.1 to 1.6.
   function kOf(fMHz) { var k = 4 / 3 * (1 + (fMHz - 915) / 915 * 0.15); return Math.max(1.1, Math.min(1.6, k)); }
@@ -86,10 +89,11 @@
     return Math.min(site.dbm, p.clientDbm) - (site.cable || 0) + site.gain + p.clientGain - sensitivityDbm(p.sf, p.bwKHz);
   }
 
-  // How far a site can possibly reach, from the signal budget alone: the distance at which free-space loss uses up everything but the margin,
-  // the noise allowance and the clutter. The ground only ever shortens this. Capped at 300 km.
+  // How far a site can possibly reach, from the signal budget alone: the distance at which free-space loss uses up the whole budget less the
+  // noise allowance and the clutter, so the margin is zero there (the edge of the orange band; the wanted margin is not held back, or the map
+  // would stop short of where a signal can still be heard). The ground only ever shortens this. Capped at 300 km.
   function reachKm(site, p) {
-    var allowed = budget(site, p) - (p.noise || 0) - (p.fade || 0) - (p.clutter || 0), d = Math.pow(10, (allowed - 32.45 - 20 * Math.log10(p.fMHz)) / 20);
+    var allowed = budget(site, p) - (p.noise || 0) - (p.clutter || 0), d = Math.pow(10, (allowed - 32.45 - 20 * Math.log10(p.fMHz)) / 20);
     return Math.max(1, Math.min(300, d));
   }
 
@@ -226,6 +230,27 @@
     return out;
   }
 
+  // The work one processor does for the pools: terrain, grid and radio settings stay put, sites come in one at a time.
+  //   add(site)    folds the site's margin into a running best (a signed byte per cell, -128 = not covered); collect() returns that map
+  //   cover(site)  the cells the site would cover, as indices
+  function makeEvaluator(dem, grid, p) {
+    var N = grid.cols * grid.rows, buf = new Float32Array(N), best = null;
+    return {
+      add: function (site) {
+        marginMap(dem, grid, site, p, buf);
+        if (!best) best = new Int8Array(N).fill(-128);
+        for (var i = 0; i < N; i++) { var v = buf[i]; if (v === v && v > -127) { v = v > 127 ? 127 : Math.round(v); if (v > best[i]) best[i] = v; } }
+      },
+      collect: function () { return best || new Int8Array(N).fill(-128); },
+      cover: function (site) {
+        marginMap(dem, grid, site, p, buf);
+        var n = 0, i; for (i = 0; i < N; i++) if (buf[i] >= p.fade) n++;
+        var out = new Uint32Array(n); n = 0; for (i = 0; i < N; i++) if (buf[i] >= p.fade) out[n++] = i;
+        return out;
+      }
+    };
+  }
+
   var tick = function () { return new Promise(function (r) { setTimeout(r, 0); }); };
 
   // Estimates what the existing repeaters cover, then picks `count` new sites one after another, each the one that adds the most
@@ -235,12 +260,16 @@
     var dem = ctx.dem, grid = ctx.grid, p = ctx.p, N = grid.cols * grid.rows, best = new Float32Array(N).fill(-Infinity), last = Date.now();
     async function yieldNow(text, f) { if (Date.now() - last > 40) { if (ctx.onProgress) ctx.onProgress(text, f); await tick(); last = Date.now(); } }
     var existingCovered = new Uint8Array(N), buf = new Float32Array(N);
-    for (var s = 0; s < ctx.existing.length; s++) {
+    if (ctx.pool && ctx.existing.length > 1) {
+      // several processors: each folds its share of the repeaters into one map (a signed byte per cell), and the maps are merged here
+      var m8 = await ctx.pool.margins(ctx.existing, function (done) { if (ctx.onProgress) ctx.onProgress('Existing repeaters (' + done + ' of ' + ctx.existing.length + ')', done / ctx.existing.length * 0.2); });
+      for (var q = 0; q < N; q++) best[q] = m8[q] === -128 ? -Infinity : m8[q];
+    } else for (var s = 0; s < ctx.existing.length; s++) {
       marginMap(dem, grid, ctx.existing[s], p, buf);
       for (var i = 0; i < N; i++) if (buf[i] > best[i]) best[i] = buf[i];
-      await yieldNow('Existing repeaters', (s + 1) / Math.max(1, ctx.existing.length) * 0.2);
+      await yieldNow('Existing repeaters (' + (s + 1) + ' of ' + ctx.existing.length + ')', (s + 1) / Math.max(1, ctx.existing.length) * 0.2);
     }
-    for (i = 0; i < N; i++) existingCovered[i] = best[i] >= p.fade ? 1 : 0;
+    for (var i = 0; i < N; i++) existingCovered[i] = best[i] >= p.fade ? 1 : 0;
     var result = { margin: best, covered: existingCovered, picks: [] };
     if (!ctx.count) return result;
 
@@ -248,9 +277,9 @@
     (ctx.nodes || []).forEach(function (n) { var c = cellOf(grid, n.lat, n.lon); if (c >= 0) { weight[c] += 20; nodeCells[c] = (nodeCells[c] || 0) + 1; } });
     var cands = candidates(dem, grid, ctx.area, { max: ctx.maxCandidates || 120 }), tmpl = ctx.repeater;
     cands.forEach(function (c) { var pt = cellCentre(grid, c.idx); c.site = { lat: pt.lat, lon: pt.lon, h: tmpl.h, dbm: tmpl.dbm, gain: tmpl.gain, cable: tmpl.cable }; });
-    if (ctx.evalCandidates) {
+    if (ctx.pool) {
       // the caller has several processors: it returns, for each candidate site, the cells that site would cover
-      var covers = await ctx.evalCandidates(cands.map(function (c) { return c.site; }), function (done) { if (ctx.onProgress) ctx.onProgress('Trying sites (' + done + ' of ' + cands.length + ')', 0.2 + 0.7 * done / cands.length); });
+      var covers = await ctx.pool.covers(cands.map(function (c) { return c.site; }), function (done) { if (ctx.onProgress) ctx.onProgress('Trying sites (' + done + ' of ' + cands.length + ')', 0.2 + 0.7 * done / cands.length); });
       cands.forEach(function (c, j) { c.cover = covers[j]; });
     } else for (var k = 0; k < cands.length; k++) {
       var c = cands[k]; marginMap(dem, grid, c.site, p, buf);
@@ -286,6 +315,11 @@
 
   var api = { appLineOfSight: appLineOfSight, reachKm: reachKm, kOf: kOf, mercX: mercX, mercY: mercY, lonOf: lonOf, latOf: latOf, mPerPx: mPerPx, haversine: haversine, elevPx: elevPx, elevAt: elevAt, terrariumHeight: terrariumHeight,
     loadDem: loadDem, tileRange: tileRange, sensitivityDbm: sensitivityDbm, fspl: fspl, edgeLoss: edgeLoss, budget: budget, makeGrid: makeGrid, cellOf: cellOf,
-    cellCentre: cellCentre, cellKm2: cellKm2, lossMap: lossMap, marginMap: marginMap, linkProfile: linkProfile, linkMargin: linkMargin, candidates: candidates, plan: plan };
+    cellCentre: cellCentre, cellKm2: cellKm2, lossMap: lossMap, marginMap: marginMap, linkProfile: linkProfile, linkMargin: linkMargin, candidates: candidates, plan: plan,
+    makeEvaluator: makeEvaluator };
+  return api;
+  }
+  var api = factory();
+  api.factorySource = '(' + factory.toString() + ')()';
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Geo = api;
 })(typeof self !== 'undefined' ? self : this);
