@@ -47,6 +47,10 @@
     else if (S.status === 'error') { txt = S.statusText + '. Reconnecting…'; cls = 'bad'; }
     else if (S.status === 'replaced') { txt = 'Another page took over this node (it allows ' + 3 + ' at a time). Reload this page to use it here.'; cls = 'bad'; }
     banner.className = txt ? 'show ' + cls : ''; banner.id = 'banner'; banner.textContent = txt;
+    if (S.status === 'replaced') {
+      banner.appendChild(document.createTextNode(' '));
+      banner.appendChild(el('button', { class: 'btn', id: 'takeover', text: 'Use it here', onclick: function () { location.reload(); } }));
+    }
   }
 
   function start() {
