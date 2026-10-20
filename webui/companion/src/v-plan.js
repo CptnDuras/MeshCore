@@ -7,7 +7,7 @@
   var ENV = [['0', 'Open country'], ['6', 'Light trees or houses'], ['12', 'Suburbs'], ['18', 'Dense trees or city']];
   var DEFAULTS = {
     freq: 910.525, bw: 62.5, sf: 8, repDbm: 22, repGain: 3, repH: 10, cable: 1, cliDbm: 20, cliGain: 0, cliH: 2, env: '6', fade: 10, noise: 6, reach: 0, count: 3,
-    link: true, losOnly: 'true', fresnel: '0'
+    link: true, losOnly: 'true', fresnel: '0', detail: 'normal'
   };
   var saved = W.store.get('mcw2:plan', null) || {};
   var P = Object.assign({}, DEFAULTS, saved.p || {}), mine = saved.sites || [], off = saved.off || {}, heights = saved.heights || {};
@@ -105,7 +105,7 @@
     if (busy) return;
     var sites = active(); if (!count && !sites.length) { UI.toast('Add a site, or wait for repeaters with a position to be heard', 'bad'); return; }
     var vb = map.bounds();
-    var req = { sites: sites.map(asSite), p: params(), repeater: { h: +P.repH, dbm: +P.repDbm, gain: +P.repGain, cable: +P.cable }, reachKm: +P.reach, count: count, link: P.link, view: vb,
+    var req = { sites: sites.map(asSite), p: params(), repeater: { h: +P.repH, dbm: +P.repDbm, gain: +P.repGain, cable: +P.cable }, reachKm: +P.reach, detail: P.detail, count: count, link: P.link, view: vb,
       nodes: Object.keys(S.contacts).map(function (k) { return S.contacts[k]; }).filter(function (c) { return c.type !== 2 && (c.lat || c.lon); })
         .map(function (c) { return { lat: c.lat, lon: c.lon, name: c.name }; }) };
     busy = true; resultsEl.textContent = ''; say('Loading terrain…');
@@ -168,7 +168,20 @@
   }
   function num(x, lo, hi) { return typeof x === 'number' && isFinite(x) && x >= lo && x <= hi; }
   // Checks a plan file and returns what it holds, or throws a sentence the person can read.
+  function parseGpx(text) {
+    var doc = new DOMParser().parseFromString(text, 'application/xml');
+    if (doc.getElementsByTagName('parsererror').length) throw new Error('That file is not a valid GPX file.');
+    var pts = Array.prototype.slice.call(doc.getElementsByTagName('wpt'));
+    if (!pts.length) throw new Error('That GPX file has no waypoints.');
+    if (pts.length > 200) throw new Error('That GPX file has too many waypoints (more than 200).');
+    return { params: {}, view: null, sites: pts.map(function (w, i) {
+      var lat = parseFloat(w.getAttribute('lat')), lon = parseFloat(w.getAttribute('lon')), n = w.getElementsByTagName('name')[0];
+      if (!num(lat, -90, 90) || !num(lon, -180, 180)) throw new Error('Waypoint ' + (i + 1) + ' has no valid position.');
+      return { name: ((n && n.textContent) || 'Site ' + (i + 1)).trim().slice(0, 40), lat: lat, lon: lon, h: null, use: true, repeater: false };
+    }) };
+  }
   function parsePlan(text) {
+    if (/^\s*</.test(text)) return parseGpx(text);
     var f; try { f = JSON.parse(text); } catch (e) { throw new Error('That file is not a plan (it is not valid JSON).'); }
     if (!f || f.app !== FILE_APP || !Array.isArray(f.sites)) throw new Error('That file is not a planner file.');
     if (f.sites.length > 200) throw new Error('That plan has too many sites (more than 200).');
@@ -197,7 +210,7 @@
     UI.toast('Loaded ' + added + ' planned site' + (added === 1 ? '' : 's') + (matched ? ' and settings for ' + matched + ' repeater' + (matched === 1 ? '' : 's') + ' you can hear' : ''));
   }
   function importPlan() {
-    var inp = el('input', { type: 'file', accept: 'application/json,.json', style: 'display:none' });
+    var inp = el('input', { type: 'file', accept: 'application/json,.json,application/gpx+xml,.gpx', style: 'display:none' });
     inp.onchange = function () {
       var file = inp.files && inp.files[0]; inp.remove(); if (!file) return;
       if (file.size > 1000000) { UI.toast('That file is too large to be a plan', 'bad'); return; }
@@ -209,6 +222,12 @@
       }).catch(function (e) { UI.toast(e.message, 'bad'); });
     };
     document.body.appendChild(inp); inp.click();
+  }
+  // The plan travels in the address fragment, which the browser never sends to a server.
+  var FULL_PLANNER = 'https://xerokuhl.com/planner/';
+  function openFull() {
+    var json = JSON.stringify(planFile()), b64 = btoa(unescape(encodeURIComponent(json))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    window.open(FULL_PLANNER + '#plan=' + b64, '_blank', 'noopener');
   }
   function exportPng() {
     var rows = ['Repeater coverage estimate · ' + new Date().toLocaleString(),
@@ -315,14 +334,16 @@
         el('div', { class: 'card' }, [el('div', { class: 'ctitle' }, [el('b', { text: 'Sites' }), addBtn]), sitesEl,
           el('div', { class: 'btnrow' }, [UI.btn('Export plan', { icon: 'download', kind: 'small', title: 'Save the sites and radio settings as a JSON file', onclick: exportPlan }),
             UI.btn('Import plan', { kind: 'small', title: 'Load sites and settings from a plan file', onclick: importPlan }),
-            UI.btn('Save map picture', { icon: 'download', kind: 'small', title: 'Save the map with the coverage as a PNG', onclick: exportPng })])]),
+            UI.btn('Save map picture', { icon: 'download', kind: 'small', title: 'Save the map with the coverage as a PNG', onclick: exportPng }),
+            backend.remote ? null : UI.btn('Open in the full planner', { kind: 'small', title: 'xerokuhl.com: finer terrain, bigger areas and more candidate sites, worked out on a server (needs a login)', onclick: openFull })])]),
         el('div', { class: 'card' }, [el('b', { text: 'Radio' }), el('div', { class: 'pgrid' }, [
           field('Frequency (MHz)', 'freq'), field('Bandwidth (kHz)', 'bw', { options: [[7.8, '7.8'], [10.4, '10.4'], [15.6, '15.6'], [20.8, '20.8'], [31.25, '31.25'], [41.7, '41.7'], [62.5, '62.5'], [125, '125'], [250, '250'], [500, '500']] }),
           field('Spreading factor', 'sf', { options: [5, 6, 7, 8, 9, 10, 11, 12].map(function (n) { return [n, 'SF' + n]; }) }),
           field('Required margin (dB)', 'fade', { min: 0, max: 30 }), field('Noise and interference (dB)', 'noise', { min: 0, max: 30 })]), fromNode]),
         el('div', { class: 'card' }, [el('b', { text: 'What counts as covered' }), el('div', { class: 'pgrid' }, [
           field('Path', 'losOnly', { options: [['true', 'Clear line of sight (like the MeshCore app)'], ['false', 'Also paths over a ridge (diffraction)']] }),
-          field('Clearance', 'fresnel', { options: [['0', 'Ground below the straight line'], ['0.6', '60% of the Fresnel zone clear']] })]),
+          field('Clearance', 'fresnel', { options: [['0', 'Ground below the straight line'], ['0.6', '60% of the Fresnel zone clear']] }),
+          backend.remote ? field('Detail', 'detail', { options: [['normal', 'Normal (100 m cells)'], ['high', 'High (60 m cells, more candidate sites)']] }) : null]),
           el('p', { class: 'dim', style: 'font-size:12px', text: 'The MeshCore app checks whether the straight line between two antennas clears the ground, allowing for the earth\'s curve. This does the same for every point around each repeater, and also requires the signal to be strong enough.' })]),
         el('div', { class: 'card' }, [el('b', { text: 'Repeater antennas' }), el('div', { class: 'pgrid' }, [
           field('Power (dBm)', 'repDbm', { min: 0, max: 30 }), field('Antenna gain (dBi)', 'repGain', { min: -5, max: 20 }), field('Height (m)', 'repH', { min: 1, max: 100 }), field('Cable loss (dB)', 'cable', { min: 0, max: 10 })])]),
@@ -349,6 +370,6 @@
   }
   function show() { setTimeout(function () { map.redraw(); refresh(); }, 30); }
 
-  root.Plan = { run: function (n) { return go(n); }, setBackend: function (b) { backend = b; }, file: planFile, parse: parsePlan, apply: applyPlan, state: function () { return { run: run, P: P, mine: mine }; } };
+  root.Plan = { run: function (n) { return go(n); }, load: function (text) { applyPlan(parsePlan(text)); }, setBackend: function (b) { backend = b; }, file: planFile, parse: parsePlan, apply: applyPlan, state: function () { return { run: run, P: P, mine: mine }; } };
   App.register({ id: 'plan', title: 'Planner', icon: 'antenna', mount: mount, show: show });
 })(window);
