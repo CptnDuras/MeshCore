@@ -9,6 +9,14 @@
   };
   var coarse = window.matchMedia && matchMedia('(pointer:coarse)').matches;
 
+  // messages the apps give a special look: a shared place "m:lat,lon|label|flags" and a GIF "g:<giphy id>"
+  function parseSpecial(text) {
+    var t = text.trim(), m = /^m:(-?[0-9.]+),(-?[0-9.]+)\|([^|]*)\|(.*)$/.exec(t);
+    if (m) { var lat = parseFloat(m[1]), lon = parseFloat(m[2]); if (Math.abs(lat) <= 90 && Math.abs(lon) <= 180) return { kind: 'pin', lat: lat, lon: lon, label: m[3].trim() }; }
+    m = /^g:([A-Za-z0-9_-]+)$/.exec(t) || /^(?:https?:\/\/)?media\.giphy\.com\/media\/([A-Za-z0-9_-]+)\/giphy\.gif$/.exec(t);
+    return m ? { kind: 'gif', id: m[1] } : null;
+  }
+
   // opts: conv, kind ('dm'|'channel'), title(), subtitle(), avatar(), canSend, channelIdx, menu() -> items, onBack
   function open(box, opts) {
     UI.clear(box);
@@ -21,7 +29,8 @@
     var sendBtn = UI.btn('', { icon: 'send', kind: 'primary', title: 'Send', onclick: submit, disabled: opts.canSend === false });
     var jump = UI.btn('', { icon: 'back', kind: '', title: 'Jump to the newest message', onclick: function () { thread.scrollTop = thread.scrollHeight; } });
     jump.classList.add('jump'); jump.hidden = true; jump.firstChild.style.transform = 'rotate(-90deg)';
-    var comp = el('form', { class: 'compose', onsubmit: function (e) { e.preventDefault(); submit(); } }, [replybar, el('div', { class: 'line' }, [input, sendBtn]), count]);
+    var placeBtn = UI.btn('', { icon: 'pin', kind: 'ghost', title: 'Share a place', onclick: function () { sharePlace(); }, disabled: opts.canSend === false });
+    var comp = el('form', { class: 'compose', onsubmit: function (e) { e.preventDefault(); submit(); } }, [replybar, el('div', { class: 'line' }, [placeBtn, input, sendBtn]), count]);
     box.appendChild(top); box.appendChild(thread); box.appendChild(comp); box.appendChild(jump);
     box.style.position = 'relative';
 
@@ -114,7 +123,16 @@
         var b = el('div', { class: 'bubble' + (m.status === 'failed' ? ' failed' : ''), tabindex: 0, role: 'button', 'aria-label': 'Message options' });
         if (!m.me && opts.kind === 'channel' && m.who) { var w = el('span', { class: 'who', text: m.who }); w.style.color = 'hsl(' + UI.hueOf(m.who) + ' 55% 40%)'; if (document.documentElement.dataset.theme === 'dark') w.style.color = 'hsl(' + UI.hueOf(m.who) + ' 70% 70%)'; b.appendChild(w); }
         if (m.replyTo) b.appendChild(el('div', { class: 'quote', text: 'Reply to ' + m.replyTo }));
-        var body = el('span'); body.appendChild(UI.linkify(m.text)); b.appendChild(body);
+        var special = parseSpecial(m.text), body = el('span');
+        if (special && special.kind === 'pin') {
+          body.appendChild(el('div', { class: 'pincard' }, [UI.icon('pin', 18), el('div', {}, [el('b', { text: special.label || 'Shared place' }), el('small', { class: 'mono', text: special.lat.toFixed(5) + ', ' + special.lon.toFixed(5) })]),
+            UI.btn('Map', { kind: 'small', onclick: function (e) { e.stopPropagation(); W.mapFocus(special.lat, special.lon, special.label || 'Shared place'); } })]));
+        } else if (special && special.kind === 'gif') {
+          var img = el('img', { class: 'gif', alt: 'GIF', loading: 'lazy', referrerpolicy: 'no-referrer', src: 'https://media.giphy.com/media/' + special.id + '/giphy.gif' });
+          img.onerror = function () { img.replaceWith(el('span', { class: 'dim', text: 'GIF (needs internet): ' + special.id })); };
+          body.appendChild(img);
+        } else body.appendChild(UI.linkify(m.text));
+        b.appendChild(body);
         if (m.reactions && m.reactions.length) {
           var counts = {}; m.reactions.forEach(function (r) { counts[r.e] = (counts[r.e] || 0) + 1; });
           b.appendChild(el('div', { class: 'reacts' }, Object.keys(counts).map(function (e) { return el('span', { text: e + (counts[e] > 1 ? ' ' + counts[e] : '') }); })));
@@ -129,11 +147,23 @@
       if (wasStuck) thread.scrollTop = thread.scrollHeight;
     }
 
-    async function submit() {
-      var text = input.value.trim(); if (!text || opts.canSend === false) return;
+    function sharePlace() {
+      var s = S.self || {};
+      UI.form('Share a place', [
+        { name: 'label', label: 'Name', value: 'My position', maxlength: 30, required: true },
+        { name: 'lat', label: 'Latitude', value: s.lat ? s.lat.toFixed(6) : '', validate: function (v) { return v !== '' && Math.abs(+v) <= 90 ? '' : 'Latitude is between -90 and 90'; } },
+        { name: 'lon', label: 'Longitude', value: s.lon ? s.lon.toFixed(6) : '', validate: function (v) { return v !== '' && Math.abs(+v) <= 180 ? '' : 'Longitude is between -180 and 180'; } }
+      ], 'Send', 'Others see a place card that opens on their map. The position saved on your node is filled in.').then(function (v) {
+        if (v) submit('m:' + (+v.lat).toFixed(6) + ',' + (+v.lon).toFixed(6) + '|' + v.label.trim().replace(/\|/g, '/') + '|');
+      });
+    }
+    async function submit(override) {
+      var text = typeof override === 'string' ? override : input.value.trim(); if (!text || opts.canSend === false) return;
       if (S.status !== 'online') { UI.toast('Not connected to the node', 'bad'); return; }
-      if (used() > limit()) { UI.toast('Too long: ' + used() + ' of ' + limit() + ' bytes', 'bad'); return; }
-      input.value = ''; var rp = replyTo; setReply(null); stick = true; updateCount();
+      if (typeof override !== 'string' && used() > limit()) { UI.toast('Too long: ' + used() + ' of ' + limit() + ' bytes', 'bad'); return; }
+      if (typeof override === 'string' && MC.byteLen(text) > limit()) { UI.toast('That place name is too long', 'bad'); return; }
+      if (typeof override !== 'string') input.value = '';
+      var rp = typeof override === 'string' ? null : replyTo; if (typeof override !== 'string') setReply(null); stick = true; updateCount();
       try {
         if (opts.kind === 'channel') await W.sendChannel(opts.channelIdx, text, { replyTo: rp ? rp.who : '' });
         else await W.sendDm(conv, text);

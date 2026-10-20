@@ -3,10 +3,15 @@
 (function (root) {
   'use strict';
   var el = UI.el, W = root.W, S = W.S, T = 256;
-  var box, view, tilesEl, markersEl, popup, w = 600, h = 400, tiles = {};
+  var box, view, tilesEl, markersEl, popup, w = 600, h = 400, tiles = {}, shared = [];
+  // a place someone shared in a chat: remembered for this session and shown as a pin of its own
+  W.mapFocus = function (lat, lon, label) {
+    if (!shared.some(function (p) { return p.lat === lat && p.lon === lon && p.label === label; })) shared.push({ lat: lat, lon: lon, label: label });
+    prefs.lat = lat; prefs.lon = lon; prefs.z = Math.max(prefs.z, 15); App.go('map');
+  };
   var prefs = W.store.get('mcw2:map', { lat: 20, lon: 0, z: 2, rep: true, people: true, other: true, age: 0, fitted: false });
-  var COLORS = { 1: '#2a74c9', 2: '#c77a12', 3: '#a540a5', 4: '#1a9a88', 0: '#d6342a' };
-  var NAMES = { 1: 'Companion', 2: 'Repeater', 3: 'Room', 4: 'Sensor' };
+  var COLORS = { 1: '#2a74c9', 2: '#c77a12', 3: '#a540a5', 4: '#1a9a88', 0: '#d6342a', 9: '#e0a800' };
+  var NAMES = { 1: 'Companion', 2: 'Repeater', 3: 'Room', 4: 'Sensor', 9: 'Shared place' };
 
   function project(lat, lon, z) {
     var s = T * Math.pow(2, z), sin = Math.sin(Math.max(-85, Math.min(85, lat)) * Math.PI / 180);
@@ -35,6 +40,7 @@
       out.push({ key: k, name: c.name, type: c.type, lat: c.lat, lon: c.lon, c: c });
     });
     if (S.self && (S.self.lat || S.self.lon)) out.push({ key: 'self', name: 'This node', type: 0, lat: S.self.lat, lon: S.self.lon });
+    shared.forEach(function (p, i) { out.push({ key: 'shared' + i, name: p.label, type: 9, lat: p.lat, lon: p.lon }); });
     return out;
   }
 
