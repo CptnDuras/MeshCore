@@ -32,10 +32,11 @@
         var wx = ((tx % n) + n) % n, key = z + '/' + tx + '/' + ty; seen[key] = 1;
         var im = tiles[key];
         if (!im) {
-          im = el('img', { alt: '', draggable: 'false', src: 'https://tile.openstreetmap.org/' + z + '/' + wx + '/' + ty + '.png', referrerpolicy: 'origin' });
+          im = el('img', { alt: '', draggable: 'false', src: 'https://tile.openstreetmap.org/' + z + '/' + wx + '/' + ty + '.png', referrerpolicy: 'origin', crossorigin: 'anonymous' });
           im.className = 'tile'; im.onerror = function () { this.style.visibility = 'hidden'; }; tiles[key] = im; tilesEl.appendChild(im);
         }
-        im.style.transform = 'translate(' + Math.round(tx * T - c.x + w / 2) + 'px,' + Math.round(ty * T - c.y + h / 2) + 'px)';
+        im.px = Math.round(tx * T - c.x + w / 2); im.py = Math.round(ty * T - c.y + h / 2);
+        im.style.transform = 'translate(' + im.px + 'px,' + im.py + 'px)';
       }
       Object.keys(tiles).forEach(function (k) { if (!seen[k]) { tiles[k].remove(); delete tiles[k]; } });
       var g = canvas.getContext('2d'); g.clearRect(0, 0, w, h);
@@ -49,6 +50,22 @@
       });
     }
     function redraw() { if (!raf) raf = requestAnimationFrame(draw); }
+    // The view as a picture: loaded tiles, the overlay and the markers. scale 2 gives twice the pixels. extra(g, w, h, scale) paints captions on top.
+    function snapshot(scale, extra) {
+      draw(); scale = scale || 1;
+      var c = document.createElement('canvas'), g = c.getContext('2d'); c.width = w * scale; c.height = h * scale;
+      g.scale(scale, scale); g.fillStyle = '#e8e4dc'; g.fillRect(0, 0, w, h);
+      Object.keys(tiles).forEach(function (k) { var im = tiles[k]; if (im.complete && im.naturalWidth) g.drawImage(im, im.px, im.py, T, T); });
+      if (overlay) overlay(g, w, h, { toScreen: toScreen, z: v.z });
+      g.font = 'bold 12px sans-serif'; g.textBaseline = 'middle'; g.lineJoin = 'round';
+      markers.forEach(function (m) {
+        var q = toScreen(m.lat, m.lon); if (q.x < -80 || q.y < -40 || q.x > w + 80 || q.y > h + 40) return;
+        g.beginPath(); g.arc(q.x, q.y, 6, 0, 7); g.fillStyle = m.color || '#d6342a'; g.fill(); g.lineWidth = 2; g.strokeStyle = '#fff'; g.stroke();
+        if (m.label) { g.lineWidth = 3; g.strokeStyle = 'rgba(255,255,255,.9)'; g.strokeText(m.label, q.x + 9, q.y); g.fillStyle = '#1b2733'; g.fillText(m.label, q.x + 9, q.y); }
+      });
+      if (extra) extra(g, w, h, scale);
+      return c;
+    }
     function setView(lat, lon, z) {
       v.lat = Math.max(-84, Math.min(84, lat)); v.lon = ((lon + 540) % 360) - 180; v.z = Math.max(2, Math.min(17, z)); redraw();
       if (opts.onView) opts.onView(v);
@@ -86,7 +103,7 @@
       if (d) { e.preventDefault(); var g = unproject(c.x + d[0], c.y + d[1], v.z); setView(g.lat, g.lon, v.z); } else if (e.key === '+' || e.key === '=') zoomAt(1, w / 2, h / 2); else if (e.key === '-') zoomAt(-1, w / 2, h / 2);
     });
     if (window.ResizeObserver) new ResizeObserver(redraw).observe(box);
-    return { el: box, view: v, setView: setView, zoomAt: zoomAt, toScreen: toScreen, fromScreen: fromScreen, bounds: bounds, redraw: redraw, size: function () { size(); return { w: w, h: h }; },
+    return { el: box, view: v, setView: setView, zoomAt: zoomAt, toScreen: toScreen, fromScreen: fromScreen, bounds: bounds, redraw: redraw, snapshot: snapshot, size: function () { size(); return { w: w, h: h }; },
       setMarkers: function (m) { markers = m; redraw(); }, setOverlay: function (f) { overlay = f; redraw(); } };
   }
   root.Slippy = { create: create, project: project, unproject: unproject };

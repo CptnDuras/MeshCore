@@ -67,7 +67,10 @@ detail, privacy, automatic adding, regions, clock, GPX export, and per-browser p
 A **Map** of nodes with a position, and a **Planner** (`geo.js` engine, `slippy.js` map, `v-plan.js` view): it estimates what the
 repeaters you can hear cover and suggests where new ones would add the most, from terrain and a radio model (free-space loss plus
 knife-edge diffraction over the worst ridge, earth radius factor 4/3, a flat allowance for trees and buildings). Terrain tiles come
-from Mapterhorn over the internet, like the map tiles. It is an estimate: check a site on the ground. Message text containing
+from Mapterhorn over the internet, like the map tiles. It is an estimate: check a site on the ground. A plan (planned sites, which
+repeaters are used, antenna heights and the radio settings) exports to a JSON file (`app: "meshcore-planner"`) and imports back
+(the file is checked first: positions, heights and settings are validated); the map with the coverage saves as a PNG with a caption,
+legend and attribution. Message text containing
 coordinates or map links gets a button that opens the place on the map.
 
 Not in yet: path trace, QR codes and camera scanning (the page is served over plain http, where browsers do not

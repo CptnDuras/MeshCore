@@ -11,7 +11,7 @@
   };
   var saved = W.store.get('mcw2:plan', null) || {};
   var P = Object.assign({}, DEFAULTS, saved.p || {}), mine = saved.sites || [], off = saved.off || {}, heights = saved.heights || {};
-  var map, panel, status, resultsEl, sitesEl, adding = false, run = null, busy = false, offscreen = null, nextId = saved.nextId || 1;
+  var rebuild, map, panel, status, resultsEl, sitesEl, adding = false, run = null, busy = false, offscreen = null, nextId = saved.nextId || 1;
 
   function persist() { W.store.set('mcw2:plan', { p: P, sites: mine, off: off, heights: heights, nextId: nextId }); }
 
@@ -145,6 +145,89 @@
     mine.push({ id: 'm:' + nextId++, name: name || 'Site ' + nextId, lat: lat, lon: lon, h: +P.repH }); persist(); refresh();
   }
 
+  // ---- plan file (JSON) and picture (PNG) ----
+  var FILE_APP = 'meshcore-planner';
+  function stamp() { return new Date().toISOString().slice(0, 16).replace(/[-:]/g, '').replace('T', '-'); }
+  function planFile() {
+    var v = map.view;
+    return { app: FILE_APP, version: 1, saved: new Date().toISOString(), params: P, view: { lat: +v.lat.toFixed(5), lon: +v.lon.toFixed(5), z: v.z },
+      sites: allSites().map(function (s) { return { name: s.name, lat: s.lat, lon: s.lon, height: +siteH(s), use: !off[s.id], repeater: !!s.existing }; }) };
+  }
+  function exportPlan() {
+    var f = planFile(); UI.download('meshcore-plan-' + stamp() + '.json', JSON.stringify(f, null, 2), 'application/json');
+    UI.toast('Saved ' + f.sites.length + ' site' + (f.sites.length === 1 ? '' : 's'));
+  }
+  function num(x, lo, hi) { return typeof x === 'number' && isFinite(x) && x >= lo && x <= hi; }
+  // Checks a plan file and returns what it holds, or throws a sentence the person can read.
+  function parsePlan(text) {
+    var f; try { f = JSON.parse(text); } catch (e) { throw new Error('That file is not a plan (it is not valid JSON).'); }
+    if (!f || f.app !== FILE_APP || !Array.isArray(f.sites)) throw new Error('That file is not a planner file.');
+    if (f.sites.length > 200) throw new Error('That plan has too many sites (more than 200).');
+    var sites = f.sites.map(function (s, i) {
+      if (!s || !num(s.lat, -90, 90) || !num(s.lon, -180, 180)) throw new Error('Site ' + (i + 1) + ' has no valid position.');
+      return { name: String(s.name || 'Site').slice(0, 40), lat: s.lat, lon: s.lon, h: num(s.height, 1, 100) ? s.height : null, use: s.use !== false, repeater: !!s.repeater };
+    });
+    var p = {}; Object.keys(DEFAULTS).forEach(function (k) {
+      var v = f.params && f.params[k]; if (typeof v === typeof DEFAULTS[k] && (typeof v !== 'number' || isFinite(v))) p[k] = v;
+    });
+    if (f.params && typeof f.params.env === 'string' && ENV.some(function (e) { return e[0] === f.params.env; })) p.env = f.params.env;
+    return { sites: sites, params: p, view: f.view && num(f.view.lat, -85, 85) && num(f.view.lon, -180, 180) && num(f.view.z, 2, 17) ? f.view : null };
+  }
+  function applyPlan(plan) {
+    var heard = existing();
+    Object.assign(P, plan.params);
+    mine = []; var matched = 0, added = 0;
+    plan.sites.forEach(function (s) {
+      var hit = s.repeater ? heard.filter(function (h) { return Math.abs(h.lat - s.lat) < 0.001 && Math.abs(h.lon - s.lon) < 0.001; })[0] : null;
+      if (hit) { matched++; off[hit.id] = !s.use; if (s.h) heights[hit.id] = s.h; return; }
+      var id = 'm:' + nextId++; mine.push({ id: id, name: s.name, lat: s.lat, lon: s.lon, h: s.h || +P.repH }); off[id] = !s.use; added++;
+    });
+    run = null; persist(); paint(); rebuild(); refresh(); listPicks();
+    if (plan.view) map.setView(plan.view.lat, plan.view.lon, plan.view.z);
+    else if (plan.sites.length) map.setView(plan.sites[0].lat, plan.sites[0].lon, Math.max(map.view.z, 10));
+    UI.toast('Loaded ' + added + ' planned site' + (added === 1 ? '' : 's') + (matched ? ' and settings for ' + matched + ' repeater' + (matched === 1 ? '' : 's') + ' you can hear' : ''));
+  }
+  function importPlan() {
+    var inp = el('input', { type: 'file', accept: 'application/json,.json', style: 'display:none' });
+    inp.onchange = function () {
+      var file = inp.files && inp.files[0]; inp.remove(); if (!file) return;
+      if (file.size > 1000000) { UI.toast('That file is too large to be a plan', 'bad'); return; }
+      file.text().then(function (text) {
+        var plan = parsePlan(text);
+        var go2 = function () { applyPlan(plan); };
+        if (mine.length) UI.confirm('Load plan', 'This replaces your ' + mine.length + ' planned site' + (mine.length === 1 ? '' : 's') + ' and the radio settings with the file\'s. Export first if you want to keep them.', 'Load', true).then(function (ok) { if (ok) go2(); });
+        else go2();
+      }).catch(function (e) { UI.toast(e.message, 'bad'); });
+    };
+    document.body.appendChild(inp); inp.click();
+  }
+  function exportPng() {
+    var rows = ['Repeater coverage estimate · ' + new Date().toLocaleString(),
+      P.freq + ' MHz · BW ' + P.bw + ' kHz · SF' + P.sf + ' · repeaters ' + P.repDbm + ' dBm, ' + P.repGain + ' dBi, ' + P.repH + ' m · handhelds ' + P.cliDbm + ' dBm, ' + P.cliH + ' m · ' + P.fade + ' dB margin'];
+    var legend = [['rgba(46,170,80,.7)', 'strong'], ['rgba(140,190,40,.7)', 'usable'], ['rgba(230,150,30,.6)', 'marginal']];
+    if (run && run.picks.length) legend.push(['rgba(40,110,230,.7)', 'added by a suggested site']);
+    var c;
+    try {
+      c = map.snapshot(2, function (g, w, h) {
+        g.font = '12px sans-serif'; g.textBaseline = 'top';
+        var bw = Math.min(w - 12, Math.max.apply(0, rows.map(function (t) { return g.measureText(t).width; })) + 16);
+        g.fillStyle = 'rgba(255,255,255,.88)'; g.fillRect(6, 6, bw, 40); g.fillStyle = '#1b2733';
+        g.font = 'bold 12px sans-serif'; g.fillText(rows[0], 14, 12, bw - 16); g.font = '11px sans-serif'; g.fillText(rows[1], 14, 28, bw - 16);
+        if (run) {
+          var lw = legend.reduce(function (a, l) { return a + g.measureText(l[1]).width + 30; }, 8);
+          g.fillStyle = 'rgba(255,255,255,.88)'; g.fillRect(6, h - 56, lw, 22); var x = 14;
+          legend.forEach(function (l) { g.fillStyle = l[0]; g.fillRect(x, h - 51, 12, 12); g.fillStyle = '#1b2733'; g.fillText(l[1], x + 18, h - 51); x += g.measureText(l[1]).width + 30; });
+        }
+        g.font = '10px sans-serif'; g.textBaseline = 'alphabetic'; var at = '© OpenStreetMap contributors · terrain: Mapterhorn', aw = g.measureText(at).width + 10;
+        g.fillStyle = 'rgba(255,255,255,.85)'; g.fillRect(w - aw, h - 16, aw, 16); g.fillStyle = '#333'; g.fillText(at, w - aw + 5, h - 5);
+      });
+    } catch (e) { UI.toast('Could not draw the picture: ' + e.message, 'bad'); return; }
+    c.toBlob(function (b) {
+      if (!b) { UI.toast('The map tiles block saving a picture in this browser', 'bad'); return; }
+      UI.download('meshcore-coverage-' + stamp() + '.png', b, 'image/png'); UI.toast('Saved the picture' + (run ? '' : ' (no coverage estimate yet, just the sites)'));
+    }, 'image/png');
+  }
+
   // ---- a link between two sites ----
   function profile(a, b) {
     if (!run) return;
@@ -217,7 +300,10 @@
       panel.appendChild(el('div', { class: 'dtop' }, [el('h1', { text: 'Repeater planner', style: 'font-size:19px' })]));
       panel.appendChild(el('div', { class: 'pbody' }, [
         el('p', { class: 'dim', text: 'Shows where your repeaters should be heard and where a new one would add the most coverage. It is an estimate from terrain and a radio model; check a site on the ground before you build.' }),
-        el('div', { class: 'card' }, [el('div', { class: 'ctitle' }, [el('b', { text: 'Sites' }), addBtn]), sitesEl]),
+        el('div', { class: 'card' }, [el('div', { class: 'ctitle' }, [el('b', { text: 'Sites' }), addBtn]), sitesEl,
+          el('div', { class: 'btnrow' }, [UI.btn('Export plan', { icon: 'download', kind: 'small', title: 'Save the sites and radio settings as a JSON file', onclick: exportPlan }),
+            UI.btn('Import plan', { kind: 'small', title: 'Load sites and settings from a plan file', onclick: importPlan }),
+            UI.btn('Save map picture', { icon: 'download', kind: 'small', title: 'Save the map with the coverage as a PNG', onclick: exportPng })])]),
         el('div', { class: 'card' }, [el('b', { text: 'Radio' }), el('div', { class: 'pgrid' }, [
           field('Frequency (MHz)', 'freq'), field('Bandwidth (kHz)', 'bw', { options: [[7.8, '7.8'], [10.4, '10.4'], [15.6, '15.6'], [20.8, '20.8'], [31.25, '31.25'], [41.7, '41.7'], [62.5, '62.5'], [125, '125'], [250, '250'], [500, '500']] }),
           field('Spreading factor', 'sf', { options: [5, 6, 7, 8, 9, 10, 11, 12].map(function (n) { return [n, 'SF' + n]; }) }),
@@ -237,7 +323,7 @@
         el('p', { class: 'dim', style: 'font-size:12px' }, [document.createTextNode('Terrain: '), el('a', { href: 'https://mapterhorn.com/attribution', target: '_blank', rel: 'noopener noreferrer', text: 'Mapterhorn' }),
           document.createTextNode('. Coverage means a handheld at the height above is heard both ways. Suggestions are the high points of the map view; buildings, trees and land access are not known.')])]));
     }
-    build();
+    rebuild = build; build();
     var first = existing()[0] || (S.self && (S.self.lat || S.self.lon) ? S.self : null), mp = W.store.get('mcw2:map', null);
     map = Slippy.create({ lat: first ? first.lat : mp ? mp.lat : 39, lon: first ? first.lon : mp ? mp.lon : -98, z: first || mp ? 10 : 4, label: 'Planner map',
       onClick: function (lat, lon) { if (adding) { adding = false; say(''); addSite(lat, lon, 'Site ' + nextId); } } });
@@ -247,6 +333,6 @@
   }
   function show() { setTimeout(function () { map.redraw(); refresh(); }, 30); }
 
-  root.Plan = { run: function (n) { return go(n); }, state: function () { return { run: run, P: P, mine: mine }; } };
+  root.Plan = { run: function (n) { return go(n); }, file: planFile, parse: parsePlan, apply: applyPlan, state: function () { return { run: run, P: P, mine: mine }; } };
   App.register({ id: 'plan', title: 'Planner', icon: 'antenna', mount: mount, show: show });
 })(window);
