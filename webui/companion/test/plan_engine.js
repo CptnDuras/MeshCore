@@ -97,6 +97,30 @@ ok('k factor stays within bounds', G.kOf(100) >= 1.1 && G.kOf(5000) <= 1.6);
   const d3 = await G.loadDem({ west: -114, east: -110, south: 35, north: 39 }, fetchTile, { maxTiles: 72 });
   ok('a big area falls back to a coarser zoom', d3.z < 12, d3.z);
   ok('Terrarium decode', G.terrariumHeight(128, 10, 128) === 10.5, G.terrariumHeight(128, 10, 128));
+  // the MeshCore app's line-of-sight check on flat ground: 20 km with 1.5 m antennas is blocked by the earth bulge, 4.4 m at the middle
+  {
+    const z8 = 8, x8 = Math.floor(G.mercX(lon0, z8)) - W / 2, y8 = Math.floor(G.mercY(lat0, z8)) - W / 2, m8 = G.mPerPx(lat0, z8);
+    const flat = { z: z8, x0: x8, y0: y8, w: W, h: W, data: new Float32Array(W * W) };
+    const a = { lat: lat0, lon: lon0, h: 1.5 }, b = { lat: lat0, lon: G.lonOf(G.mercX(lon0, z8) + 20000 / m8, z8), h: 1.5 };
+    const r = G.appLineOfSight(flat, a, b, { fMHz: 915 }), want = (10000 * 10000) / (2 * 6371000 * 4 / 3) - 1.5;
+    ok('app check: 20 km over flat ground is blocked by about 4.4 m', r.hasData && !r.isClear && Math.abs(r.maxObstructionM - want) < 0.15 && r.samples === 81, [r.maxObstructionM, want]);
+    const near = G.appLineOfSight(flat, a, { lat: lat0, lon: G.lonOf(G.mercX(lon0, z8) + 3000 / m8, z8), h: 1.5 }, { fMHz: 915 });
+    ok('app check: 3 km over flat ground is clear', near.isClear && near.samples === 41, near);
+  }
+  // the shared run, over the wire and back
+  {
+    const Pr = require('../src/planrun.js'), la = 37, lo = -112;
+    const tile = async (zz, x, y) => { const t = new Float32Array(65536); for (let i = 0; i < 65536; i++) t[i] = 1500 + ((i % 256) > 100 && (i % 256) < 110 ? 400 : 0); return t; };
+    const req = { sites: [{ lat: la, lon: lo, h: 10, dbm: 22, gain: 3, cable: 1, name: 'R' }], p: { fMHz: 910.525, sf: 8, bwKHz: 62.5, clientDbm: 20, clientGain: 0, rxH: 2, clutter: 6, fade: 10, noise: 6, linkClutter: 0, losOnly: true, fresnel: 0 },
+      repeater: { h: 10, dbm: 22, gain: 3, cable: 1 }, reachKm: 25, count: 2, link: true, view: { north: la + 0.1, south: la - 0.1, west: lo - 0.15, east: lo + 0.15 }, nodes: [{ lat: la, lon: lo + 0.02, name: 'N' }] };
+    const r = await Pr.run(req, tile), back = await Pr.unpack(JSON.parse(JSON.stringify(Pr.pack(r))));
+    ok('run returns a margin map, picks and a heard check', r.margin.length === r.grid.cols * r.grid.rows && r.picks.length >= 1 && r.heard.inside.concat(r.heard.outside).length === 1, [r.picks.length, r.heard]);
+    let same = back.margin.length === r.margin.length; for (let i = 0; same && i < r.margin.length; i++) { const a = r.margin[i], b = back.margin[i]; if (!(a > -127 ? Math.abs(a - b) <= 0.5 : b === -Infinity)) same = false; }
+    ok('packed result unpacks to the same margins (to the dB)', same);
+    ok('packed picks keep their cells and link', back.picks.length === r.picks.length && back.picks[0].cells.length === r.picks[0].cells.length && !!back.picks[0].link);
+    const lk = await Pr.link({ a: Object.assign({}, req.sites[0]), b: { lat: la, lon: lo + 0.05, h: 10, dbm: 22, gain: 3, cable: 1, name: 'B' }, p: req.p }, tile);
+    ok('link returns our profile and the app verdict', lk.profile.dist.length > 8 && typeof lk.app.isClear === 'boolean', lk.app);
+  }
   // a long reach (200 km across) loads at a coarser zoom instead of failing; a continent is refused with the size in the message
   const bb = { south: 36.1, north: 37.9, west: -113.1, east: -110.9 }, d4 = await G.loadDem(bb, async () => new Float32Array(65536));
   ok('a 200 km box loads at a coarser zoom', d4.z >= 7 && d4.z < 12, d4.z);

@@ -61,6 +61,12 @@
     return out;
   }
 
+  // Where the work happens. On the node's page the browser does it; the planner service replaces this with calls to its Lambda (setBackend).
+  var backend = {
+    run: function (req, onProgress) { return root.Planrun.run(req, fetchTile, onProgress); },
+    link: function (req) { return root.Planrun.link(req, fetchTile); }
+  };
+
   // ---- drawing ----
   function paint() {
     if (!run) { offscreen = null; map.setOverlay(null); return; }
@@ -98,38 +104,27 @@
   async function go(count) {
     if (busy) return;
     var sites = active(); if (!count && !sites.length) { UI.toast('Add a site, or wait for repeaters with a position to be heard', 'bad'); return; }
-    var p = params(), reachKm = +P.reach > 0 ? Math.min(300, +P.reach) : G.reachKm({ dbm: +P.repDbm, gain: +P.repGain, cable: +P.cable }, p), rangeDeg = reachKm / 111, vb = map.bounds(), bbox;
-    p.rangeM = reachKm * 1000;
-    var pts = sites.map(function (s) { return { lat: s.lat, lon: s.lon }; });
-    if (count) pts.push({ lat: vb.north, lon: vb.west }, { lat: vb.south, lon: vb.east });
-    var la = pts.map(function (q) { return q.lat; }), lo = pts.map(function (q) { return q.lon; }), mid = (Math.min.apply(0, la) + Math.max.apply(0, la)) / 2;
-    bbox = { south: Math.min.apply(0, la) - rangeDeg, north: Math.max.apply(0, la) + rangeDeg, west: Math.min.apply(0, lo) - rangeDeg / Math.cos(mid * Math.PI / 180), east: Math.max.apply(0, lo) + rangeDeg / Math.cos(mid * Math.PI / 180) };
+    var vb = map.bounds();
+    var req = { sites: sites.map(asSite), p: params(), repeater: { h: +P.repH, dbm: +P.repDbm, gain: +P.repGain, cable: +P.cable }, reachKm: +P.reach, count: count, link: P.link, view: vb,
+      nodes: Object.keys(S.contacts).map(function (k) { return S.contacts[k]; }).filter(function (c) { return c.type !== 2 && (c.lat || c.lon); })
+        .map(function (c) { return { lat: c.lat, lon: c.lon, name: c.name }; }) };
     busy = true; resultsEl.textContent = ''; say('Loading terrain…');
     try {
-      var dem = await G.loadDem(bbox, fetchTile, { onProgress: function (a, b) { say('Loading terrain… ' + a + ' of ' + b + ' tiles'); } });
-      var live = 0, total = 0; for (var i = 0; i < dem.data.length; i += 997) { total++; if (dem.data[i] === dem.data[i]) live++; }
-      if (live < total * 0.5) throw new Error('No terrain data came back. The planner needs the internet for it.');
-      var cp = Math.max(1, Math.round(120 / G.mPerPx(mid, dem.z))), grid = G.makeGrid(dem, cp);
-      var nodes = Object.keys(S.contacts).map(function (k) { return S.contacts[k]; }).filter(function (c) { return c.type !== 2 && (c.lat || c.lon); });
-      var res = await G.plan({ dem: dem, grid: grid, p: p, existing: sites.map(asSite), count: count, area: vb, requireLink: P.link, nodes: nodes,
-        repeater: { h: +P.repH, dbm: +P.repDbm, gain: +P.repGain, cable: +P.cable }, onProgress: function (t, f) { say(t + ' · ' + Math.round(f * 100) + '%'); } });
-      run = { grid: grid, dem: dem, margin: res.margin, picks: res.picks, p: p, sites: sites.map(asSite) };
-      var cov = 0; for (var k = 0; k < res.covered.length; k++) cov += res.covered[k];
-      var res_m = grid.cp * G.mPerPx(mid, dem.z);
-      say('Existing repeaters cover about ' + fmtArea(cov * G.cellKm2(grid, mid)) + (count ? '. ' + res.picks.length + ' site' + (res.picks.length === 1 ? '' : 's') + ' suggested.' : '.') +
-        ' Reach used: ' + fmtKm(reachKm) + (+P.reach > 0 ? '' : ' (from the signal budget)') + '.' +
-        (res_m > 250 ? ' The area is large, so terrain is sampled every ' + fmtM(res_m) + ' and small hills are missed. Zoom in for detail.' : ''));
-      paint(); markers(); listPicks(); heardCheck(res.margin, grid, nodes);
-      if (count && !res.picks.length) resultsEl.appendChild(el('p', { class: 'dim', text: 'No place in view adds coverage and can reach a repeater. Move the map, lower the signal margin, or turn off "must reach a repeater".' }));
+      var r = await backend.run(req, function (t, f) { say(t + (f ? ' · ' + Math.round(f * 100) + '%' : '')); });
+      run = { grid: r.grid, margin: r.margin, picks: r.picks, p: r.p, sites: req.sites };
+      say('Existing repeaters cover about ' + fmtArea(r.covKm2) + (count ? '. ' + r.picks.length + ' site' + (r.picks.length === 1 ? '' : 's') + ' suggested.' : '.') +
+        ' Reach used: ' + fmtKm(r.reachKm) + (+P.reach > 0 ? '' : ' (from the signal budget)') + '.' +
+        (r.resM > 250 ? ' The area is large, so terrain is sampled every ' + fmtM(r.resM) + ' and small hills are missed. Zoom in for detail.' : ''));
+      paint(); markers(); listPicks(); heardCheck(r.heard);
+      if (count && !r.picks.length) resultsEl.appendChild(el('p', { class: 'dim', text: 'No place in view adds coverage and can reach a repeater. Move the map, lower the signal margin, or turn off "must reach a repeater".' }));
     } catch (e) { say(''); UI.toast(e.message, 'bad'); }
     busy = false;
   }
 
   // A check against reality: the people and rooms your node has heard that have a position, and whether the estimate says they are in reach.
   // Those the estimate misses are where it is too pessimistic (or they were heard through another repeater).
-  function heardCheck(margin, grid, nodes) {
-    var inside = [], outside = [];
-    nodes.forEach(function (n) { var c = G.cellOf(grid, n.lat, n.lon); if (c < 0) return; (margin[c] >= +P.fade ? inside : outside).push(n.name); });
+  function heardCheck(heard) {
+    var inside = heard.inside, outside = heard.outside;
     if (!inside.length && !outside.length) return;
     resultsEl.appendChild(el('div', { class: 'card' }, [el('b', { text: 'Against the nodes you have heard' }),
       el('p', { text: inside.length + ' of ' + (inside.length + outside.length) + ' contacts with a position are inside the estimate.' }),
@@ -243,10 +238,10 @@
   }
 
   // ---- a link between two sites ----
-  function profile(a, b) {
-    if (!run) return;
-    var pr = G.linkMargin(run.dem, a, b, run.p);
-    if (!pr) { UI.toast('No terrain data under that path', 'bad'); return; }
+  async function profile(a, b) {
+    var out;
+    try { say('Loading the path…'); out = await backend.link({ a: a, b: b, p: params() }); say(''); } catch (e) { say(''); UI.toast(e.message, 'bad'); return; }
+    var pr = out.profile, app = out.app;
     var cv = el('canvas', { width: 600, height: 250, style: 'width:100%;max-width:600px;border:1px solid var(--line);border-radius:8px;background:var(--panel2)' }), g = cv.getContext('2d');
     var lo = Infinity, hi = -Infinity;
     pr.ground.forEach(function (v, i) { lo = Math.min(lo, v); hi = Math.max(hi, v, pr.los[i] + pr.fresnel[i]); });
@@ -262,14 +257,15 @@
     g.strokeStyle = '#d6342a'; g.lineWidth = 1.5; g.beginPath(); pr.dist.forEach(function (d, i) { g[i ? 'lineTo' : 'moveTo'](X(d), Y(pr.los[i])); }); g.stroke();
     var sight = pr.blockedBy > 0 ? 'Line of sight blocked by ' + fmtM(pr.blockedBy) + ' of ground ' + fmtKm(pr.blockedKm) + ' from ' + (a.name || 'the first site')
       : pr.nu > -0.78 ? 'Line of sight is clear, but terrain gets within the first Fresnel zone ' + Math.round(pr.blockedAt * 100) + '% of the way along' : 'Line of sight is clear';
-    var body = el('div', {}, [cv, el('p', { text: sight + ' (earth radius factor ' + pr.k.toFixed(2) + ').' }),
+    var verdict = !app.hasData ? 'The MeshCore app\'s check has no terrain for this path.' : app.isClear ? 'The MeshCore app\'s line-of-sight check: clear.'
+      : 'The MeshCore app\'s line-of-sight check: blocked by up to ' + fmtM(app.maxObstructionM) + ', first ' + fmtKm(app.firstObstructionM / 1000) + ' from ' + (a.name || 'the first site') + '.';
+    var body = el('div', {}, [cv, el('p', { text: sight + ' (earth radius factor ' + pr.k.toFixed(2) + ').' }), el('p', { text: verdict }),
       el('p', { text: fmtKm(pr.km) + ' · path loss ' + pr.loss.toFixed(0) + ' dB · ' + (pr.margin >= 0 ? Math.round(pr.margin) + ' dB to spare' : Math.round(-pr.margin) + ' dB short') }),
       el('p', { class: 'dim', text: 'Red is the straight line between the antennas, blue the zone that should stay clear, brown the ground (raised by earth curvature).' })]);
     UI.alert((a.name || 'Site') + ' to ' + (b.name || 'site'), body);
   }
   function checkLink() {
     var list = active(); if (list.length < 2) { UI.toast('Turn on at least two sites first', 'bad'); return; }
-    if (!run) { UI.toast('Estimate coverage first so there is terrain loaded', 'bad'); return; }
     var opts = list.map(function (s) { return { value: s.id, label: s.name }; });
     UI.form('Check a link', [{ name: 'a', label: 'From', options: opts, value: opts[0].value }, { name: 'b', label: 'To', options: opts, value: opts[1].value }], 'Show').then(function (v) {
       if (!v || v.a === v.b) return;
@@ -353,6 +349,6 @@
   }
   function show() { setTimeout(function () { map.redraw(); refresh(); }, 30); }
 
-  root.Plan = { run: function (n) { return go(n); }, file: planFile, parse: parsePlan, apply: applyPlan, state: function () { return { run: run, P: P, mine: mine }; } };
+  root.Plan = { run: function (n) { return go(n); }, setBackend: function (b) { backend = b; }, file: planFile, parse: parsePlan, apply: applyPlan, state: function () { return { run: run, P: P, mine: mine }; } };
   App.register({ id: 'plan', title: 'Planner', icon: 'antenna', mount: mount, show: show });
 })(window);

@@ -176,6 +176,30 @@
     return loss;
   }
 
+  // The MeshCore app's own line-of-sight check (lib/services/line_of_sight_service.dart), step for step: 21, 41 or 81 evenly spaced samples
+  // along the straight line in latitude and longitude, ground raised by the earth bulge with radius 6371 km times k, and the straight line
+  // between the antenna tips. A sample is blocked when the line is below the ground. Only the elevation source differs (here the DEM).
+  function appLineOfSight(dem, a, b, p) {
+    var D = haversine(a, b);
+    if (D <= 1) return { hasData: true, isClear: true, distanceM: D, maxObstructionM: 0, firstObstructionM: null, obstructions: [], k: kOf(p.fMHz), samples: 0 };
+    var n = D < 2000 ? 21 : D < 10000 ? 41 : 81, el = [], k = kOf(p.fMHz), Re = R_E * k;
+    for (var i = 0; i < n; i++) {
+      var t = i / (n - 1), e = elevAt(dem, a.lat + (b.lat - a.lat) * t, a.lon + (b.lon - a.lon) * t);
+      if (e !== e) return { hasData: false, isClear: false, distanceM: D, k: k, error: 'No terrain data for part of the path.' };
+      el.push(e);
+    }
+    var h0 = el[0] + a.h, h1 = el[n - 1] + b.h, maxObs = 0, first = null, obs = [], worst = null, clear = true;
+    for (i = 0; i < n; i++) {
+      var f = i / (n - 1), d = D * f, line = h0 + (h1 - h0) * f, bulge = d * (D - d) / (2 * Re), ground = el[i] + bulge, clearance = line - ground;
+      if (clearance < 0) {
+        clear = false; var o = -clearance; if (o > maxObs) maxObs = o; if (first === null) first = d;
+        if (!worst || o > worst.obstructionM) worst = { distanceM: d, obstructionM: o, terrainM: ground, lineM: line, lat: a.lat + (b.lat - a.lat) * f, lon: a.lon + (b.lon - a.lon) * f };
+      } else if (worst) { obs.push(worst); worst = null; }
+    }
+    if (worst) obs.push(worst);
+    return { hasData: true, isClear: clear, distanceM: D, maxObstructionM: maxObs, firstObstructionM: first, obstructions: obs, k: k, samples: n };
+  }
+
   // ---- finding places ----
   // Candidate sites: the high points of the search area (a cell no lower than anything within `radiusM`), thinned so that no two are
   // closer than `gapM`, highest first.
@@ -256,7 +280,7 @@
     return result;
   }
 
-  var api = { reachKm: reachKm, kOf: kOf, mercX: mercX, mercY: mercY, lonOf: lonOf, latOf: latOf, mPerPx: mPerPx, haversine: haversine, elevPx: elevPx, elevAt: elevAt, terrariumHeight: terrariumHeight,
+  var api = { appLineOfSight: appLineOfSight, reachKm: reachKm, kOf: kOf, mercX: mercX, mercY: mercY, lonOf: lonOf, latOf: latOf, mPerPx: mPerPx, haversine: haversine, elevPx: elevPx, elevAt: elevAt, terrariumHeight: terrariumHeight,
     loadDem: loadDem, tileRange: tileRange, sensitivityDbm: sensitivityDbm, fspl: fspl, edgeLoss: edgeLoss, budget: budget, makeGrid: makeGrid, cellOf: cellOf,
     cellCentre: cellCentre, cellKm2: cellKm2, lossMap: lossMap, marginMap: marginMap, linkProfile: linkProfile, linkMargin: linkMargin, candidates: candidates, plan: plan };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Geo = api;
