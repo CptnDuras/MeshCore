@@ -242,6 +242,13 @@
         for (var i = 0; i < N; i++) { var v = buf[i]; if (v === v && v > -127) { v = v > 127 ? 127 : Math.round(v); if (v > best[i]) best[i] = v; } }
       },
       collect: function () { return best || new Int8Array(N).fill(-128); },
+      // one site's own margin map, a signed byte per cell (-128 = not covered)
+      map: function (site) {
+        marginMap(dem, grid, site, p, buf);
+        var out = new Int8Array(N);
+        for (var i = 0; i < N; i++) { var v = buf[i]; out[i] = v === v && v > -127 ? (v > 127 ? 127 : Math.round(v)) : -128; }
+        return out;
+      },
       cover: function (site) {
         marginMap(dem, grid, site, p, buf);
         var n = 0, i; for (i = 0; i < N; i++) if (buf[i] >= p.fade) n++;
@@ -277,6 +284,9 @@
     (ctx.nodes || []).forEach(function (n) { var c = cellOf(grid, n.lat, n.lon); if (c >= 0) { weight[c] += 20; nodeCells[c] = (nodeCells[c] || 0) + 1; } });
     var cands = candidates(dem, grid, ctx.area, { max: ctx.maxCandidates || 120 }), tmpl = ctx.repeater;
     cands.forEach(function (c) { var pt = cellCentre(grid, c.idx); c.site = { lat: pt.lat, lon: pt.lon, h: tmpl.h, dbm: tmpl.dbm, gain: tmpl.gain, cable: tmpl.cable }; });
+    // only sites inside the circle the caller asked for (the area itself is the circle's bounding box)
+    if (ctx.within) cands = cands.filter(function (c) { return haversine(c.site, ctx.within) <= ctx.within.km * 1000; });
+    result.rejected = 0;
     if (ctx.pool) {
       // the caller has several processors: it returns, for each candidate site, the cells that site would cover
       var covers = await ctx.pool.covers(cands.map(function (c) { return c.site; }), function (done) { if (ctx.onProgress) ctx.onProgress('Trying sites (' + done + ' of ' + cands.length + ')', 0.2 + 0.7 * done / cands.length); });
@@ -292,13 +302,20 @@
       cands.forEach(function (c) { var sc = 0; for (var j = 0; j < c.cover.length; j++) { var ci = c.cover[j]; if (!mask[ci]) sc += weight[ci]; } c.score = sc; });
       var order = cands.filter(function (c) { return !c.used && c.score > 0; }).sort(function (a, b) { return b.score - a.score; }), chosen = null, link = null;
       for (var o = 0; o < order.length && !chosen; o++) {
+        // a rule the caller keeps (for example "public land only"), asked about the best-scoring candidates first
+        if (ctx.accept && !(await ctx.accept(order[o].site))) { order[o].used = true; result.rejected++; await yieldNow('Checking sites against your rules (' + result.rejected + ' turned down)', 0.9); continue; }
         if (!ctx.requireLink || !network.length) { chosen = order[o]; break; }
-        var bestLink = null, bestWith = null;
+        // a real mesh wants more than one way in: the site must reach ctx.minLinks sites already in the plan (or all of them, when fewer exist),
+        // each with at least ctx.minLinkDb to spare
+        var links = [];
         network.forEach(function (r) {
           var lm = linkMargin(dem, order[o].site, r, p);
-          if (lm && lm.ok && (!bestLink || lm.margin > bestLink.margin)) { bestLink = lm; bestWith = r; }
+          if (lm && lm.ok && lm.margin >= (ctx.minLinkDb || 0)) links.push({ with: r, margin: lm.margin, km: lm.km });
         });
-        if (bestLink) { chosen = order[o]; link = { with: bestWith, margin: bestLink.margin, km: bestLink.km }; }
+        links.sort(function (x, y) { return y.margin - x.margin; });
+        if (links.length && links.length >= Math.min(Math.max(1, ctx.minLinks || 1), network.length)) {
+          chosen = order[o]; link = { with: links[0].with, margin: links[0].margin, km: links[0].km, all: links };
+        }
       }
       if (!chosen) break;
       chosen.used = true;
@@ -313,7 +330,66 @@
     return result;
   }
 
-  var api = { appLineOfSight: appLineOfSight, reachKm: reachKm, kOf: kOf, mercX: mercX, mercY: mercY, lonOf: lonOf, latOf: latOf, mPerPx: mPerPx, haversine: haversine, elevPx: elevPx, elevAt: elevAt, terrariumHeight: terrariumHeight,
+  // Sites that join two points a and b. A relay must reach both ends (one relay), or reach one end each and each other (two relays), with at
+  // least opts.minMargin dB to spare on every leg, and sit no further than opts.corridorM from the straight line between a and b.
+  // opts: { template (h, dbm, gain, cable), corridorM, count, hops (1 or 2), minMargin, maxCandidates, accept(site) -> Promise<bool>, onProgress(text, f) }
+  async function relays(dem, grid, a, b, p, opts) {
+    var last = Date.now(), say = opts.onProgress || function () {};
+    async function pace(text, f) { if (Date.now() - last > 40) { say(text, f); await tick(); last = Date.now(); } }
+    var minM = opts.minMargin != null ? opts.minMargin : p.fade, t = opts.template, corridor = opts.corridorM;
+    var mid = (a.lat + b.lat) / 2, kx = Math.cos(mid * Math.PI / 180) * 111320, ky = 110540;
+    var ax = a.lon * kx, ay = a.lat * ky, bx = b.lon * kx, by = b.lat * ky, dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy || 1;
+    function off(q) {   // metres from the straight line between the two ends
+      var u = Math.max(0, Math.min(1, ((q.lon * kx - ax) * dx + (q.lat * ky - ay) * dy) / len2));
+      return Math.hypot(q.lon * kx - (ax + u * dx), q.lat * ky - (ay + u * dy));
+    }
+    var padLat = corridor / ky, padLon = corridor / kx;
+    var area = { north: Math.max(a.lat, b.lat) + padLat, south: Math.min(a.lat, b.lat) - padLat, east: Math.max(a.lon, b.lon) + padLon, west: Math.min(a.lon, b.lon) - padLon };
+    var cands = candidates(dem, grid, area, { max: opts.maxCandidates || 300, gapM: 500 });
+    cands.forEach(function (c) { var pt = cellCentre(grid, c.idx); c.site = { lat: pt.lat, lon: pt.lon, h: t.h, dbm: t.dbm, gain: t.gain, cable: t.cable }; });
+    cands = cands.filter(function (c) { return off(c.site) <= corridor; });
+    var direct = linkMargin(dem, a, b, p), out = { direct: direct && { margin: direct.margin, ok: direct.ok, km: direct.km, clear: direct.clear }, relays: [], rejected: 0, tried: cands.length };
+    function leg(from, to, lm) { return { from: from, to: to, margin: lm.margin, km: lm.km, clear: lm.clear }; }
+    function good(lm) { return lm && lm.ok && lm.margin >= minM; }
+    for (var i = 0; i < cands.length; i++) {
+      var c = cands[i]; c.la = linkMargin(dem, a, c.site, p); c.lb = linkMargin(dem, b, c.site, p);
+      await pace('Trying places between the two points (' + (i + 1) + ' of ' + cands.length + ')', 0.5 * (i + 1) / cands.length);
+    }
+    var singles = cands.filter(function (c) { return good(c.la) && good(c.lb); }).sort(function (x, y) { return Math.min(y.la.margin, y.lb.margin) - Math.min(x.la.margin, x.lb.margin); });
+    for (i = 0; i < singles.length && out.relays.length < opts.count; i++) {
+      c = singles[i];
+      if (opts.accept && !(await opts.accept(c.site))) { out.rejected++; continue; }
+      out.relays.push({ chain: [{ lat: c.site.lat, lon: c.site.lon, elev: c.elev, site: c.site }], legs: [leg('A', 'relay', c.la), leg('relay', 'B', c.lb)], min: Math.min(c.la.margin, c.lb.margin) });
+    }
+    if ((opts.hops || 1) >= 2 && out.relays.length < opts.count) {
+      // no single relay (or too few): a pair, one that reaches A and one that reaches B, that can reach each other
+      var SA = cands.filter(function (q) { return good(q.la); }).sort(function (x, y) { return y.la.margin - x.la.margin; }).slice(0, 60);
+      var SB = cands.filter(function (q) { return good(q.lb); }).sort(function (x, y) { return y.lb.margin - x.lb.margin; }).slice(0, 60);
+      var pairs = [], n = 0, tot = SA.length * SB.length;
+      for (var x = 0; x < SA.length; x++) for (var y = 0; y < SB.length; y++) {
+        n++;
+        if (SA[x] === SB[y]) continue;
+        var lm = linkMargin(dem, SA[x].site, SB[y].site, p);
+        if (good(lm)) pairs.push({ x: SA[x], y: SB[y], lm: lm, min: Math.min(SA[x].la.margin, SB[y].lb.margin, lm.margin) });
+        if (n % 200 === 0) await pace('Trying pairs of relays (' + n + ' of ' + tot + ')', 0.5 + 0.5 * n / Math.max(1, tot));
+      }
+      pairs.sort(function (u, v) { return v.min - u.min; });
+      var usedSites = {};
+      out.relays.forEach(function (r) { r.chain.forEach(function (q) { usedSites[q.lat + ',' + q.lon] = 1; }); });
+      for (i = 0; i < pairs.length && out.relays.length < opts.count; i++) {
+        var pr = pairs[i], kx2 = pr.x.site.lat + ',' + pr.x.site.lon, ky2 = pr.y.site.lat + ',' + pr.y.site.lon;
+        if (usedSites[kx2] || usedSites[ky2]) continue;
+        if (opts.accept && !((await opts.accept(pr.x.site)) && (await opts.accept(pr.y.site)))) { out.rejected++; continue; }
+        usedSites[kx2] = usedSites[ky2] = 1;
+        out.relays.push({ chain: [{ lat: pr.x.site.lat, lon: pr.x.site.lon, elev: pr.x.elev, site: pr.x.site }, { lat: pr.y.site.lat, lon: pr.y.site.lon, elev: pr.y.elev, site: pr.y.site }],
+          legs: [leg('A', 'relay 1', pr.x.la), leg('relay 1', 'relay 2', pr.lm), leg('relay 2', 'B', pr.y.lb)], min: pr.min });
+      }
+    }
+    out.relays.sort(function (u, v) { return (u.chain.length - v.chain.length) || (v.min - u.min); });
+    return out;
+  }
+
+  var api = { relays: relays, appLineOfSight: appLineOfSight, reachKm: reachKm, kOf: kOf, mercX: mercX, mercY: mercY, lonOf: lonOf, latOf: latOf, mPerPx: mPerPx, haversine: haversine, elevPx: elevPx, elevAt: elevAt, terrariumHeight: terrariumHeight,
     loadDem: loadDem, tileRange: tileRange, sensitivityDbm: sensitivityDbm, fspl: fspl, edgeLoss: edgeLoss, budget: budget, makeGrid: makeGrid, cellOf: cellOf,
     cellCentre: cellCentre, cellKm2: cellKm2, lossMap: lossMap, marginMap: marginMap, linkProfile: linkProfile, linkMargin: linkMargin, candidates: candidates, plan: plan,
     makeEvaluator: makeEvaluator };

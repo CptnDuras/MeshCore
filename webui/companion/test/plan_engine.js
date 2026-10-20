@@ -121,6 +121,39 @@ ok('k factor stays within bounds', G.kOf(100) >= 1.1 && G.kOf(5000) <= 1.6);
     const lk = await Pr.link({ a: Object.assign({}, req.sites[0]), b: { lat: la, lon: lo + 0.05, h: 10, dbm: 22, gain: 3, cable: 1, name: 'B' }, p: req.p }, tile);
     ok('link returns our profile and the app verdict', lk.profile.dist.length > 8 && typeof lk.app.isClear === 'boolean', lk.app);
   }
+  // joining two points: a ridge between A and B blocks them; a tall mound on the ridge line sees both
+  {
+    const mj = 3000 / mpp, dem = mk((i, j) => 100 + Math.max(Math.abs(i) < 6 ? 400 : 0, 600 - 0.5 * Math.hypot(i * mpp, (j - mj) * mpp))), grid = G.makeGrid(dem, 4);
+    const at = (mx, my) => ({ lat: G.latOf(y0 + W / 2 + my / mpp, z), lon: G.lonOf(x0 + W / 2 + mx / mpp, z), h: 10, dbm: 22, gain: 3, cable: 0 });
+    const A = at(-5000, 0), B = at(5000, 0), tmpl = { h: 10, dbm: 22, gain: 3, cable: 0 };
+    const pp = Object.assign({}, p, { rangeM: 20000 });
+    const r = await G.relays(dem, grid, A, B, pp, { template: tmpl, corridorM: 6000, count: 3, hops: 1, minMargin: 3 });
+    ok('relays: the direct link over the ridge is blocked', r.direct && !r.direct.ok, r.direct);
+    ok('relays: the mound is found, and both legs have margin', r.relays.length >= 1 && r.relays[0].chain.length === 1 && r.relays[0].legs.every((l) => l.margin >= 3), r.relays.length && r.relays[0].legs);
+    ok('relays: the relay sits on the mound', r.relays.length && G.haversine(r.relays[0].chain[0], at(0, 3000)) < 700, r.relays.length && r.relays[0].chain[0]);
+    const none = await G.relays(dem, grid, A, B, pp, { template: tmpl, corridorM: 6000, count: 3, hops: 1, minMargin: 3, accept: async () => false });
+    ok('relays: a rule that turns everything down leaves no relay and counts the refusals', none.relays.length === 0 && none.rejected > 0, [none.relays.length, none.rejected]);
+    const narrow = await G.relays(dem, grid, A, B, pp, { template: tmpl, corridorM: 300, count: 3, hops: 1, minMargin: 3 });
+    ok('relays: a strip too narrow to reach the mound finds nothing', narrow.relays.every((q) => q.chain.every((c) => G.haversine(c, at(0, 3000)) > 700)), narrow.relays.length);
+    // a search circle keeps every suggested site inside it, and the mesh rule asks for the listed number of links
+    const area = { north: G.latOf(y0 + 200, z), south: G.latOf(y0 + W - 200, z), west: G.lonOf(x0 + 200, z), east: G.lonOf(x0 + W - 200, z) }, centre = at(0, 3000);
+    const c = await G.plan({ dem, grid, p: pp, existing: [A, B], nodes: [], area, count: 3, repeater: tmpl, requireLink: true, within: { lat: centre.lat, lon: centre.lon, km: 2.5 } });
+    ok('search circle: every pick is inside it', c.picks.every((q) => G.haversine(q, centre) <= 2500), c.picks.map((q) => Math.round(G.haversine(q, centre))));
+    const m2 = await G.plan({ dem, grid, p: pp, existing: [A, B], nodes: [], area, count: 2, repeater: tmpl, requireLink: true, minLinks: 2, minLinkDb: 3 });
+    ok('mesh rule: every pick reaches both repeaters', m2.picks.length >= 1 && m2.picks.every((q) => q.link && q.link.all.length >= 2 && q.link.all.every((l) => l.margin >= 3)), m2.picks.map((q) => q.link && q.link.all.length));
+    const rej = await G.plan({ dem, grid, p: pp, existing: [A, B], nodes: [], area, count: 2, repeater: tmpl, requireLink: false, accept: async () => false });
+    ok('rules: a rule that refuses every place leaves no pick', rej.picks.length === 0 && rej.rejected > 0, [rej.picks.length, rej.rejected]);
+  }
+  // distance to a road, and what a land agency code means
+  {
+    const Rd = require('../src/roads.js'), Ld = require('../src/land.js');
+    const geom = [{ lat: 37, lon: -112 }, { lat: 37, lon: -111.9 }];   // an east-west road
+    const d = Rd.distTo(37.009, -111.95, geom);   // 0.009 degrees north is about 1 km
+    ok('road distance: a point 0.009 degrees off the road is about 1 km away', Math.abs(d - 995) < 25, d);
+    ok('road distance: past the end of the road measures to the end', Math.abs(Rd.distTo(37, -112.1, geom) - 0.1 * 111320 * Math.cos(37 * Math.PI / 180)) < 30);
+    ok('land: classes', Ld.classOf('USFS') === 'federal' && Ld.classOf('ST') === 'state' && Ld.classOf('PVT') === 'private' && Ld.classOf('BIA') === 'tribal' && Ld.classOf(null) === 'unknown');
+    ok('land: public means federal, state or local only', Ld.isPublic(Ld.describe('BLM')) && Ld.isPublic(Ld.describe('LG')) && !Ld.isPublic(Ld.describe('PVT')) && !Ld.isPublic(Ld.describe('NTVALL')));
+  }
   // a long reach (200 km across) loads at a coarser zoom instead of failing; a continent is refused with the size in the message
   const bb = { south: 36.1, north: 37.9, west: -113.1, east: -110.9 }, d4 = await G.loadDem(bb, async () => new Float32Array(65536));
   ok('a 200 km box loads at a coarser zoom', d4.z >= 7 && d4.z < 12, d4.z);

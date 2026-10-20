@@ -41,13 +41,38 @@
       Object.keys(tiles).forEach(function (k) { if (!seen[k]) { tiles[k].remove(); delete tiles[k]; } });
       var g = canvas.getContext('2d'); g.clearRect(0, 0, w, h);
       if (overlay) overlay(g, w, h, { toScreen: toScreen, z: z });
+      if (drag) return;   // the pin being dragged must stay in the page until it is let go
       UI.clear(markersEl);
       markers.forEach(function (m) {
         var q = toScreen(m.lat, m.lon); if (q.x < -80 || q.y < -40 || q.x > w + 80 || q.y > h + 40) return;
-        markersEl.appendChild(el('button', { class: 'pin' + (m.cls ? ' ' + m.cls : ''), type: 'button', title: m.title || m.label, 'aria-label': m.title || m.label,
-          style: 'transform:translate(' + Math.round(q.x) + 'px,' + Math.round(q.y) + 'px)', onclick: function (e) { e.stopPropagation(); if (m.onclick) m.onclick(m); } },
-          [el('i', { style: 'background:' + (m.color || '#d6342a') }), el('span', { text: m.label || '' })]));
+        var pin = el('button', { class: 'pin' + (m.cls ? ' ' + m.cls : '') + (m.draggable ? ' drag' : ''), type: 'button', title: m.title || m.label, 'aria-label': m.title || m.label,
+          style: 'transform:translate(' + Math.round(q.x) + 'px,' + Math.round(q.y) + 'px)', onclick: function (e) { e.stopPropagation(); if (dragged) { dragged = false; return; } if (m.onclick) m.onclick(m); } },
+          [el('i', { style: 'background:' + (m.color || '#d6342a') }), el('span', { text: m.label || '' })]);
+        if (m.draggable) pin.addEventListener('pointerdown', function (e) { startDrag(e, m, pin); });
+        markersEl.appendChild(pin);
       });
+    }
+    // A marker with draggable: true follows the pointer; m.ondrag(lat, lon) is called as it moves and m.ondrop(lat, lon) when it is let go.
+    var drag = null, dragged = false;
+    function startDrag(e, m, pin) {
+      e.stopPropagation(); e.preventDefault();
+      var start = { x: e.clientX, y: e.clientY }, moved = false, r = box.getBoundingClientRect();
+      drag = m;   // from now until it is let go, redraws leave the markers alone so this pin keeps its pointer
+      try { pin.setPointerCapture(e.pointerId); } catch (x) { }
+      function move(ev) {
+        if (!moved && Math.abs(ev.clientX - start.x) + Math.abs(ev.clientY - start.y) < 5) return;
+        moved = true;
+        var g = fromScreen(ev.clientX - r.left, ev.clientY - r.top); m.lat = g.lat; m.lon = g.lon;
+        pin.style.transform = 'translate(' + Math.round(ev.clientX - r.left) + 'px,' + Math.round(ev.clientY - r.top) + 'px)';
+        if (m.ondrag) m.ondrag(g.lat, g.lon);
+      }
+      function end(ev) {
+        pin.removeEventListener('pointermove', move); pin.removeEventListener('pointerup', end); pin.removeEventListener('pointercancel', end);
+        drag = null;
+        if (moved) { dragged = true; if (m.ondrop) m.ondrop(m.lat, m.lon); setTimeout(function () { dragged = false; }, 0); }
+        redraw();
+      }
+      pin.addEventListener('pointermove', move); pin.addEventListener('pointerup', end); pin.addEventListener('pointercancel', end);
     }
     function redraw() { if (!raf) raf = requestAnimationFrame(draw); }
     // The view as a picture: loaded tiles, the overlay and the markers. scale 2 gives twice the pixels. extra(g, w, h, scale) paints captions on top.
