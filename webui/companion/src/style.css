@@ -183,3 +183,18 @@ table.t{width:100%;border-collapse:collapse;font-size:14px}table.t th,table.t td
 .mentions .mi{display:flex;align-items:center;gap:10px;width:100%;padding:7px 10px;border:0;border-radius:8px;background:none;color:inherit;text-align:left;cursor:pointer}
 .mentions .mi.on,.mentions .mi:hover{background:var(--panel2)}
 .bubble .coord{margin:0 2px;vertical-align:middle;white-space:nowrap}
+.overlay{position:absolute;inset:0;pointer-events:none}
+.plan{flex-direction:row}
+.planpanel{width:380px;flex:none;overflow-y:auto;border-right:1px solid var(--line);background:var(--bg)}
+.planpanel .pbody{display:flex;flex-direction:column;gap:12px;padding:12px 14px 24px}
+.plan .mapview{flex:1;min-height:0}
+.ctitle{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.pgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px;margin:8px 0}
+.pf{display:flex;flex-direction:column;gap:2px;font-size:12px;color:var(--dim)}.pf input,.pf select{width:100%}.pf.inline{flex-direction:row;align-items:center;gap:6px}
+.siterow{display:flex;align-items:center;gap:8px;padding:5px 0;border-top:1px solid var(--line)}.siterow:first-child{border-top:0}
+.siterow .nm{flex:1;min-width:0;text-align:left;background:none;border:0;color:inherit;cursor:pointer;padding:0}.siterow .nm b,.siterow .nm small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.siterow .hin{width:56px}
+.pstatus{min-height:1.2em}
+.pick{display:flex;flex-direction:column;gap:6px;margin-top:8px;font-size:13px}.pick .ph{display:flex;gap:8px;align-items:baseline}
+.legend{font-size:12px;color:var(--dim)}.legend i{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;margin:0 3px 0 8px}
+@media (max-width:860px){.plan{flex-direction:column;overflow-y:auto}.planpanel{width:auto;border-right:0;overflow:visible}.plan .mapview{flex:none;height:56vh;min-height:300px;order:-1}}

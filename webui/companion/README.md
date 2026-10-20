@@ -64,7 +64,13 @@ a **repeater hub** (sign in, status, neighbours, sensors, the routing features o
 (ping, discover, radio statistics, node console, sensors) and **Settings** (name, position, radio with presets, route
 detail, privacy, automatic adding, regions, clock, GPX export, and per-browser preferences).
 
-Not in yet: the map, path trace, QR codes and camera scanning (the page is served over plain http, where browsers do not
+A **Map** of nodes with a position, and a **Planner** (`geo.js` engine, `slippy.js` map, `v-plan.js` view): it estimates what the
+repeaters you can hear cover and suggests where new ones would add the most, from terrain and a radio model (free-space loss plus
+knife-edge diffraction over the worst ridge, earth radius factor 4/3, a flat allowance for trees and buildings). Terrain tiles come
+from Mapterhorn over the internet, like the map tiles. It is an estimate: check a site on the ground. Message text containing
+coordinates or map links gets a button that opens the place on the map.
+
+Not in yet: path trace, QR codes and camera scanning (the page is served over plain http, where browsers do not
 offer the camera or the clipboard API; copy and paste text instead), image messages, translation.
 
 ## Editing the page
@@ -82,5 +88,7 @@ array). `gen_webui.py --check` fails if the header is stale; `--html FILE` write
   `oracle/compare_webui.py` in the meshnode repo. `oracle/test_webui_e2e.py` there drives the page in a headless browser
   against the stock companion code through a WebSocket bridge (22 checks: connect, a long contact list, channels, search, receive,
   send, delivery confirmation, hostile names, settings, console, statistics, reconnect).
+- `node test/plan_engine.js`: the planner's engine on made-up terrain (free-space loss on flat ground, a ridge's shadow, earth
+  curvature, link profiles, candidate sites, tile stitching).
 - Frame layouts that are newer than the hosted 1.17.1 firmware (the console, command 66) are checked against the
   source of this tree instead.
