@@ -173,6 +173,7 @@
     }
     page.appendChild(card('This browser', [
       row('Theme', null, seg('theme', [['auto', 'Auto'], ['light', 'Light'], ['dark', 'Dark']])),
+      row('Distances', null, seg('units', [['metric', 'Metric'], ['imperial', 'Imperial']])),
       row('Message text size', null, seg('textScale', [[0.9, 'Small'], [1, 'Normal'], [1.2, 'Large']])),
       row('Show signal details on messages', 'Signal quality and number of hops', toggle(W.settings.showTrace, function (on) { W.setSetting('showTrace', on); })),
       row('Send tries for a direct message', 'How often an unanswered message is sent again', el('select', { class: 'sel', 'aria-label': 'Tries', onchange: function (e) { W.setSetting('retries', +e.target.value); } },

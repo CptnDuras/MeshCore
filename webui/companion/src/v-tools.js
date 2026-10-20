@@ -149,10 +149,78 @@
     return el('section', { class: 'card' }, [el('h2', { text: 'This node\'s sensors' }), out, el('div', { class: 'btnrow', style: 'margin-top:8px' }, [go])]);
   }
 
-  var TABS = [['ping', 'Ping', pingCard], ['discover', 'Discover', discoverCard], ['stats', 'Statistics', statsCard], ['console', 'Console', consoleCard], ['sensors', 'Sensors', sensorsCard]];
+
+  // ---- path trace: send a packet along a chosen list of repeaters and read the signal at every hop ----
+  var traceHops = [], traceBack = true, traceRes = null;
+  function traceCard() {
+    var width = ((S.dev && S.dev.pathHashMode) || 0) + 1;
+    var reps = Object.keys(S.contacts).map(function (k) { return S.contacts[k]; }).filter(function (c) { return c.type === 2; }).sort(function (a, b) { return a.name.localeCompare(b.name); });
+    var pick = el('select', { class: 'sel', 'aria-label': 'Repeater to add' }, reps.map(function (c) { return el('option', { value: c.key, text: c.name }); }));
+    var chips = el('div', { class: 'btnrow', style: 'margin:8px 0' }), out = el('div');
+    function name(hash) { var k = Object.keys(S.contacts).filter(function (x) { return x.indexOf(hash) === 0; }); return k.length === 1 ? S.contacts[k[0]].name : k.length > 1 ? hash + ' (' + k.length + ' match)' : hash; }
+    function paintChips() {
+      UI.clear(chips);
+      if (!traceHops.length) chips.appendChild(el('span', { class: 'dim', text: 'Add the repeaters to pass through, in order.' }));
+      traceHops.forEach(function (k, i) { chips.appendChild(el('span', { class: 'tag' }, [(i + 1) + '. ' + (S.contacts[k] ? S.contacts[k].name : k.slice(0, 8)) + ' ', UI.btn('', { icon: 'x', kind: 'ghost small', title: 'Remove', onclick: function () { traceHops.splice(i, 1); paintChips(); } })])); });
+    }
+    function paint() {
+      UI.clear(out); if (!traceRes) return;
+      var r = traceRes; out.appendChild(el('table', { class: 't' }, [el('tr', {}, ['Hop', 'Node', 'Signal to noise'].map(function (h) { return el('th', { text: h }); }))]
+        .concat(r.hops.map(function (h, i) { return el('tr', {}, [el('td', { text: i + 1 }), el('td', { text: name(h) }), el('td', { text: r.snrs[i] != null ? r.snrs[i] + ' dB' : '—' })]); }))
+        .concat([el('tr', {}, [el('td', { text: 'end' }), el('td', { text: 'This node' }), el('td', { text: r.lastSnr + ' dB' })])])));
+    }
+    var go = UI.btn('Trace', { icon: 'route', kind: 'primary', disabled: S.status !== 'online', onclick: function () {
+      if (!traceHops.length) { UI.toast('Add at least one repeater', 'bad'); return; }
+      var seq = traceHops.slice(); if (traceBack) seq = seq.concat(traceHops.slice(0, -1).reverse());
+      var bytes = []; seq.forEach(function (k) { for (var i = 0; i < width; i++) bytes.push(parseInt(k.substr(i * 2, 2), 16)); });
+      var tag = (Math.random() * 0xffffffff) >>> 0; go.disabled = true; traceRes = null; paint();
+      var off = W.bus.on('push', function (m) { if (m.t === 'trace' && m.tag === tag) { off(); clearTimeout(t); traceRes = m; go.disabled = false; paint(); } });
+      var t = setTimeout(function () { off(); go.disabled = false; UI.toast('The trace did not come back. A hop may be out of range.', 'bad'); }, 30000);
+      W.req(MC.enc.trace(tag, 0, width === 1 ? 0 : width === 2 ? 1 : 2, Uint8Array.from(bytes)), ['sent']).catch(function (e) { off(); clearTimeout(t); go.disabled = false; UI.toast(e.message, 'bad'); });
+    } });
+    paintChips(); paint();
+    return el('section', { class: 'card' }, [el('h2', {}, ['Path trace', el('small', { text: 'signal at every hop' })]),
+      el('p', { class: 'dim', text: 'Sends a packet through the repeaters you choose and reports how well each one heard it. Each repeater is named by the first ' + width + (width > 1 ? ' bytes' : ' byte') + ' of its id (see Settings → Route detail).' }),
+      reps.length ? el('div', { class: 'btnrow' }, [pick, UI.btn('Add', { icon: 'plus', onclick: function () { if (pick.value) { traceHops.push(pick.value); paintChips(); } } })]) : el('p', { class: 'tag warn', text: 'No repeaters in your contacts yet.' }),
+      chips, el('label', { class: 'field check' }, [el('span', { class: 'lbl', text: 'Come back the same way' }), el('input', { type: 'checkbox', checked: traceBack, onchange: function (e) { traceBack = e.target.checked; } })]),
+      el('div', { class: 'btnrow', style: 'margin:8px 0' }, [go]), out]);
+  }
+
+  // ---- radio log: every packet this radio hears, decoded just far enough to read ----
+  var ROUTE = ['transport flood', 'flood', 'direct', 'transport direct'];
+  var PTYPE = ['request', 'response', 'text', 'ack', 'advert', 'group text', 'group data', 'anon request', 'path', 'trace', 'multipart', 'control'];
+  var rxLog = [], rxOn = false, rxPaused = false, rxRepaint = null;
+  function parsePacket(raw) {
+    if (raw.length < 2) return null;
+    var h = raw[0], rt = h & 3, pt = h >> 2 & 15, o = 1; if (rt === 0 || rt === 3) o += 4;
+    var pl = raw[o++], w = (pl >> 6 & 3) + 1, n = pl & 63;
+    if (pl === 255) { n = 0; w = 1; }
+    return { route: ROUTE[rt], type: pt === 15 ? 'raw' : PTYPE[pt] || '0x' + pt.toString(16), hops: n, path: MC.hex(raw, o, Math.min(n * w, raw.length - o)).match(new RegExp('.{1,' + w * 2 + '}', 'g')) || [], size: raw.length };
+  }
+  W.bus.on('push', function (m) {
+    if (m.t !== 'rx' || rxPaused) return;
+    var p = parsePacket(m.raw); if (!p) return; p.t = Math.floor(Date.now() / 1000); p.snr = m.snr; p.rssi = m.rssi;
+    rxLog.push(p); if (rxLog.length > 300) rxLog.shift(); if (rxRepaint) rxRepaint();
+  });
+  function logCard() {
+    var out = el('div'); rxRepaint = paint;
+    function paint() {
+      UI.clear(out);
+      if (!rxLog.length) { out.appendChild(el('p', { class: 'dim', text: 'Nothing heard yet. Packets appear here while this page is open.' })); return; }
+      out.appendChild(el('table', { class: 't' }, [el('tr', {}, ['Time', 'Kind', 'Route', 'Hops', 'Path', 'Bytes', 'Signal'].map(function (h) { return el('th', { text: h }); }))].concat(rxLog.slice(-120).reverse().map(function (p) {
+        return el('tr', {}, [el('td', { text: new Date(p.t * 1000).toLocaleTimeString() }), el('td', { text: p.type }), el('td', { text: p.route }), el('td', { text: p.hops }), el('td', { class: 'mono', text: p.path.join(' › ') }), el('td', { text: p.size }), el('td', { text: p.snr + ' dB / ' + p.rssi + ' dBm' })]);
+      }))));
+    }
+    var pause = UI.btn(rxPaused ? 'Resume' : 'Pause', { onclick: function () { rxPaused = !rxPaused; render(); } });
+    paint();
+    return el('section', { class: 'card' }, [el('h2', {}, ['Radio log', el('small', { text: 'last ' + Math.min(120, rxLog.length) + ' packets heard' })]),
+      el('div', { class: 'btnrow', style: 'margin-bottom:8px' }, [pause, UI.btn('Clear', { onclick: function () { rxLog = []; paint(); } })]), out]);
+  }
+
+  var TABS = [['ping', 'Ping', pingCard], ['discover', 'Discover', discoverCard], ['trace', 'Path trace', traceCard], ['log', 'Radio log', logCard], ['stats', 'Statistics', statsCard], ['console', 'Console', consoleCard], ['sensors', 'Sensors', sensorsCard]];
   function render() {
     if (!box) return;
-    UI.clear(box); page = el('div', { class: 'page' });
+    rxRepaint = null; UI.clear(box); page = el('div', { class: 'page' });
     page.appendChild(el('h1', { text: 'Tools', style: 'font-size:22px' }));
     var seg = el('div', { class: 'seg', role: 'tablist', style: 'flex-wrap:wrap' }, TABS.map(function (t) {
       return el('button', { type: 'button', role: 'tab', class: tab === t[0] ? 'sel' : '', text: t[1], onclick: function () { tab = t[0]; W.store.set('mcw2:toolstab', tab); render(); } });
