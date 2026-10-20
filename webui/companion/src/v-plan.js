@@ -98,6 +98,7 @@
   function siteMenu(s) {
     var anchor = map.el;
     UI.menu(anchor, [
+      { label: 'Details', icon: 'info', run: function () { siteDetails(s); } },
       { label: off[s.id] ? 'Use this site' : 'Leave this site out', icon: 'check', run: function () { off[s.id] = !off[s.id]; persist(); refresh(); } },
       s.existing ? null : { label: 'Remove', icon: 'x', danger: true, run: function () { mine = mine.filter(function (m) { return m.id !== s.id; }); delete off[s.id]; persist(); refresh(); } }
     ]);
@@ -159,6 +160,80 @@
     mine.push({ id: 'm:' + nextId++, name: name || 'Site ' + nextId, lat: lat, lon: lon, h: +P.repH }); persist(); refresh();
   }
 
+  // ---- coordinates typed or pasted in, and the details of a site ----
+  // One site per line: "lat, lon", "name, lat, lon" or "name, lat, lon, height". Commas, semicolons, tabs or spaces separate the
+  // values; a first line of column titles, blank lines and lines starting with # are skipped.
+  function parseCoordLines(text) {
+    var out = [];
+    text.split(/\r?\n/).forEach(function (raw, i) {
+      var line = raw.trim(); if (!line || line[0] === '#') return;
+      var parts = line.indexOf(',') >= 0 || line.indexOf(';') >= 0 || line.indexOf('\t') >= 0 ? line.split(/[,;\t]/) : line.split(/\s+/);
+      parts = parts.map(function (t) { return t.trim().replace(/^"|"$/g, ''); });
+      var n = parts.map(parseFloat), k = isFinite(n[0]) && /^[-+]?\d/.test(parts[0]) ? 0 : 1;   // a name comes first when the first value is not a number
+      var lat = n[k], lon = n[k + 1], h = n[k + 2];
+      if (!out.length && /lat/i.test(line) && !isFinite(lat)) return;   // column titles
+      if (!num(lat, -90, 90) || !num(lon, -180, 180)) throw new Error('Line ' + (i + 1) + ': expected a latitude (-90 to 90) and a longitude (-180 to 180).');
+      out.push({ name: (k ? parts[0] : '').slice(0, 40) || 'Site ' + (out.length + 1), lat: lat, lon: lon, h: num(h, 1, 100) ? h : null,
+        use: parts[k + 3] !== 'false', repeater: parts[k + 4] === 'true' });   // the last two columns are what exportCsv writes
+    });
+    if (!out.length) throw new Error('No coordinates found. Use one site per line, like: Hilltop, 33.4484, -112.0740, 12');
+    if (out.length > 200) throw new Error('Too many sites (more than 200).');
+    return out;
+  }
+  function addByCoordinates() {
+    UI.form('Add sites by coordinates', [{ name: 'text', label: 'Coordinates', type: 'textarea', rows: 7, placeholder: 'Hilltop, 33.4484, -112.0740\n33.5, -112.1\nName, lat, lon, antenna height (m)',
+      hint: 'One site per line: latitude, longitude, with a name in front and a height after if you like.' }], 'Add').then(function (v) {
+      if (!v) return;
+      try {
+        var sites = parseCoordLines(v.text);
+        sites.forEach(function (s) { mine.push({ id: 'm:' + nextId++, name: s.name, lat: s.lat, lon: s.lon, h: s.h || +P.repH }); });
+        persist(); refresh(); map.setView(sites[0].lat, sites[0].lon, Math.max(map.view.z, 10));
+        UI.toast('Added ' + sites.length + ' site' + (sites.length === 1 ? '' : 's'));
+      } catch (e) { UI.toast(e.message, 'bad'); addByCoordinates(); }
+    });
+  }
+  function csvCell(t) { t = String(t); return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; }
+  function exportCsv() {
+    var rows = [['name', 'lat', 'lon', 'height_m', 'use', 'repeater']].concat(allSites().map(function (s) {
+      return [s.name, s.lat.toFixed(6), s.lon.toFixed(6), +siteH(s), !off[s.id], !!s.existing]; }));
+    UI.download('meshcore-sites-' + stamp() + '.csv', rows.map(function (r) { return r.map(csvCell).join(','); }).join('\n') + '\n', 'text/csv');
+    UI.toast('Saved ' + (rows.length - 1) + ' site' + (rows.length === 2 ? '' : 's'));
+  }
+  function dms(v, pos, neg) {
+    var a = Math.abs(v), d = Math.floor(a), m = Math.floor((a - d) * 60), s = ((a - d) * 60 - m) * 60;
+    return d + '° ' + m + '′ ' + s.toFixed(1) + '″ ' + (v >= 0 ? pos : neg);
+  }
+  function siteDetails(s) {
+    var planned = mine.filter(function (m) { return m.id === s.id; })[0];
+    var rows = [['Position', s.lat.toFixed(6) + ', ' + s.lon.toFixed(6)], ['Degrees', dms(s.lat, 'N', 'S') + '  ' + dms(s.lon, 'E', 'W')],
+      ['Antenna height', fmtM(+siteH(s)) + ' above ground'], ['In the plan', off[s.id] ? 'Left out' : 'Used']];
+    if (s.existing) {
+      var c = S.contacts[s.id.slice(2)];
+      if (c) rows.push(['Public key', c.key.slice(0, 16) + '…'], ['Last heard', UI.ago(c.lastAdvert)], ['Route', c.pathLen === 255 ? 'Flood (no stored path)' : c.pathLen === 0 ? 'Direct' : (c.pathLen & 63) + ' hop' + ((c.pathLen & 63) === 1 ? '' : 's')]);
+    } else rows.push(['Source', 'Planned site']);
+    var body = el('div', {}, [el('dl', { class: 'kv' }, rows.reduce(function (a, r) { a.push(el('dt', { text: r[0] }), el('dd', { text: r[1] })); return a; }, [])),
+      s.existing ? el('p', { class: 'dim', text: 'The position comes from the repeater\'s own advert. To try a different spot, add a planned site.' }) : null]);
+    var btns = [{ label: 'Copy position', value: 'copy' }, { label: 'Show on map', value: 'map' }];
+    if (planned) btns.push({ label: 'Edit', value: 'edit' });
+    btns.push({ label: 'Close', kind: 'primary', value: null });
+    UI.dialog(s.name, body, btns).then(function (r) {
+      if (r === 'copy') UI.copy(s.lat.toFixed(6) + ', ' + s.lon.toFixed(6));
+      else if (r === 'map') map.setView(s.lat, s.lon, Math.max(map.view.z, 12));
+      else if (r === 'edit') editSite(planned);
+    });
+  }
+  function editSite(m) {
+    UI.form('Edit ' + m.name, [{ name: 'name', label: 'Name', value: m.name, maxlength: 40, required: true },
+      { name: 'lat', label: 'Latitude', type: 'number', step: 'any', min: -90, max: 90, value: m.lat },
+      { name: 'lon', label: 'Longitude', type: 'number', step: 'any', min: -180, max: 180, value: m.lon },
+      { name: 'h', label: 'Antenna height above ground (m)', type: 'number', min: 1, max: 100, step: 'any', value: m.h }], 'Save').then(function (v) {
+      if (!v) return;
+      var lat = parseFloat(v.lat), lon = parseFloat(v.lon), h = parseFloat(v.h);
+      if (!num(lat, -90, 90) || !num(lon, -180, 180) || !num(h, 1, 100)) { UI.toast('Check the latitude, longitude and height', 'bad'); editSite(m); return; }
+      m.name = v.name.trim().slice(0, 40) || m.name; m.lat = lat; m.lon = lon; m.h = h; persist(); refresh();
+    });
+  }
+
   // ---- plan file (JSON) and picture (PNG) ----
   var FILE_APP = 'meshcore-planner';
   function stamp() { return new Date().toISOString().slice(0, 16).replace(/[-:]/g, '').replace('T', '-'); }
@@ -187,6 +262,7 @@
   }
   function parsePlan(text) {
     if (/^\s*</.test(text)) return parseGpx(text);
+    if (!/^\s*[{[]/.test(text)) return { sites: parseCoordLines(text), params: {}, view: null };   // a CSV or text list of coordinates
     var f; try { f = JSON.parse(text); } catch (e) { throw new Error('That file is not a plan (it is not valid JSON).'); }
     if (!f || f.app !== FILE_APP || !Array.isArray(f.sites)) throw new Error('That file is not a planner file.');
     if (f.sites.length > 200) throw new Error('That plan has too many sites (more than 200).');
@@ -215,7 +291,7 @@
     UI.toast('Loaded ' + added + ' planned site' + (added === 1 ? '' : 's') + (matched ? ' and settings for ' + matched + ' repeater' + (matched === 1 ? '' : 's') + ' you can hear' : ''));
   }
   function importPlan() {
-    var inp = el('input', { type: 'file', accept: 'application/json,.json,application/gpx+xml,.gpx', style: 'display:none' });
+    var inp = el('input', { type: 'file', accept: 'application/json,.json,application/gpx+xml,.gpx,text/csv,.csv,text/plain,.txt', style: 'display:none' });
     inp.onchange = function () {
       var file = inp.files && inp.files[0]; inp.remove(); if (!file) return;
       if (file.size > 1000000) { UI.toast('That file is too large to be a plan', 'bad'); return; }
@@ -316,6 +392,7 @@
         if (s.existing) heights[s.id] = v; else mine.forEach(function (m) { if (m.id === s.id) m.h = v; }); persist(); } });
       sitesEl.appendChild(el('div', { class: 'siterow' }, [cb, el('button', { type: 'button', class: 'nm', onclick: function () { map.setView(s.lat, s.lon, Math.max(map.view.z, 11)); }, title: 'Show on the map' },
         [el('b', { text: s.name }), el('small', { text: s.existing ? 'Repeater you can hear' : 'Planned' })]), h, el('small', { class: 'dim', text: 'm' }),
+        UI.btn('', { icon: 'info', kind: 'ghost small', title: 'Details and coordinates of ' + s.name, onclick: function () { siteDetails(s); } }),
         s.existing ? null : UI.btn('', { icon: 'x', kind: 'ghost small', title: 'Remove', onclick: function () { mine = mine.filter(function (m) { return m.id !== s.id; }); delete off[s.id]; persist(); refresh(); } })]));
     });
     markers();
@@ -340,7 +417,9 @@
             UI.btn('All', { kind: 'small', title: 'Use every site', onclick: function () { allSites().forEach(function (s) { delete off[s.id]; }); persist(); refresh(); } }),
             UI.btn('None', { kind: 'small', title: 'Leave every site out', onclick: function () { allSites().forEach(function (s) { off[s.id] = true; }); persist(); refresh(); } }), addBtn])]), sitesEl,
           el('div', { class: 'btnrow' }, [UI.btn('Export plan', { icon: 'download', kind: 'small', title: 'Save the sites and radio settings as a JSON file', onclick: exportPlan }),
-            UI.btn('Import plan', { kind: 'small', title: 'Load sites and settings from a plan file', onclick: importPlan }),
+            UI.btn('Import plan', { kind: 'small', title: 'Load sites and settings from a plan file (JSON), a GPX file, or a CSV/text list of coordinates', onclick: importPlan }),
+            UI.btn('Add by coordinates', { kind: 'small', title: 'Type or paste latitude and longitude, one site per line', onclick: addByCoordinates }),
+            UI.btn('Export CSV', { icon: 'download', kind: 'small', title: 'Save the sites as a CSV: name, lat, lon, height', onclick: exportCsv }),
             UI.btn('Save map picture', { icon: 'download', kind: 'small', title: 'Save the map with the coverage as a PNG', onclick: exportPng }),
             backend.remote ? null : UI.btn('Open in the full planner', { kind: 'small', title: 'xerokuhl.com: finer terrain, bigger areas and more candidate sites, worked out on a server (needs a login)', onclick: openFull })])]),
         el('div', { class: 'card' }, [el('b', { text: 'Radio' }), el('div', { class: 'pgrid' }, [
