@@ -100,10 +100,23 @@
       var g = fromScreen(px, py), z0 = v.z; v.z = z1;
       var nc = project(g.lat, g.lon, z1), centre = unproject(nc.x - (px - w / 2), nc.y - (py - h / 2), z1); v.z = z0; setView(centre.lat, centre.lon, z1);
     }
-    var ptrs = {}, last = null, moved = 0, pinch = 0;
+    var ptrs = {}, last = null, moved = 0, pinch = 0, press = 0;
+    // onContext(lat, lon): a right click, or a touch held still for a moment, on the map itself (not on a marker)
+    function context(clientX, clientY) { var r = box.getBoundingClientRect(), g = fromScreen(clientX - r.left, clientY - r.top); opts.onContext(g.lat, g.lon); }
     box.addEventListener('pointerdown', function (e) {
       if (e.target.closest && e.target.closest('.pin')) return;
+      if (e.pointerType === 'mouse' && e.button !== 0) return;   // a right click is not the start of a drag or a tap
       box.setPointerCapture(e.pointerId); ptrs[e.pointerId] = { x: e.clientX, y: e.clientY }; last = { x: e.clientX, y: e.clientY }; moved = 0; pinch = 0;
+      clearTimeout(press);
+      if (opts.onContext && e.pointerType !== 'mouse') {
+        var x = e.clientX, y = e.clientY;
+        press = setTimeout(function () { if (moved < 6 && Object.keys(ptrs).length === 1) { moved = 99; context(x, y); } }, 600);
+      }
+    });
+    if (opts.onContext) box.addEventListener('contextmenu', function (e) {
+      e.preventDefault();
+      if (e.pointerType === 'touch' || (e.target.closest && e.target.closest('.pin'))) return;   // a held touch is handled above; markers have their own menu
+      context(e.clientX, e.clientY);
     });
     box.addEventListener('pointermove', function (e) {
       if (!ptrs[e.pointerId]) return; ptrs[e.pointerId] = { x: e.clientX, y: e.clientY };
@@ -118,7 +131,7 @@
     });
     function up(e) {
       var wasTap = ptrs[e.pointerId] && moved < 6 && Object.keys(ptrs).length === 1 && e.type === 'pointerup';
-      delete ptrs[e.pointerId]; pinch = 0;
+      delete ptrs[e.pointerId]; pinch = 0; clearTimeout(press);
       if (wasTap && opts.onClick) { var r = box.getBoundingClientRect(), g = fromScreen(e.clientX - r.left, e.clientY - r.top); opts.onClick(g.lat, g.lon); }
     }
     box.addEventListener('pointerup', up); box.addEventListener('pointercancel', up);

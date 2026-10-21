@@ -427,6 +427,12 @@
     mine.push({ id: 'm:' + nextId++, name: name || 'Site ' + nextId, lat: lat, lon: lon, h: +P.repH }); persist(); refresh();
   }
 
+  // A right click (or a held touch) on the map: name a proposed repeater and put it there.
+  function nameAndAdd(lat, lon) {
+    UI.form('Add a proposed repeater here', [{ name: 'name', label: 'Name', value: 'Site ' + nextId, required: true, maxlength: 40 }], 'Add',
+      lat.toFixed(5) + ', ' + lon.toFixed(5)).then(function (r) { if (r) { addSite(lat, lon, r.name.trim()); UI.toast('Added ' + r.name.trim()); } });
+  }
+
   // ---- coordinates typed or pasted in, and the details of a site ----
   // One site per line: "lat, lon", "name, lat, lon" or "name, lat, lon, height". Commas, semicolons, tabs or spaces separate the
   // values; a first line of column titles, blank lines and lines starting with # are skipped.
@@ -749,7 +755,8 @@
     rebuild = build; build(); fillRules();
     var first = existing()[0] || (S.self && (S.self.lat || S.self.lon) ? S.self : null), mp = W.store.get('mcw2:map', null);
     map = Slippy.create({ lat: first ? first.lat : mp ? mp.lat : 39, lon: first ? first.lon : mp ? mp.lon : -98, z: first || mp ? 10 : 4, label: 'Planner map',
-      onClick: function (lat, lon) { if (adding) { adding = false; say(''); addSite(lat, lon, 'Site ' + nextId); } } });
+      onClick: function (lat, lon) { if (adding) { adding = false; say(''); addSite(lat, lon, 'Site ' + nextId); } },
+      onContext: nameAndAdd });
     box.appendChild(panel); box.appendChild(map.el);
     W.bus.on('contacts', function () { if (App.current() && App.current().id === 'plan') refresh(); });
     refresh();
