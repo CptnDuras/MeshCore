@@ -221,8 +221,8 @@ void setup() {
   the_mesh.setBLEPin(0);
 #endif
 
-// add bluetooth interface
-#if defined(BLE_PIN_CODE)
+// add bluetooth interface (BLE_START_LAST: after WiFi and the web page are up instead of before)
+#if defined(BLE_PIN_CODE) && !defined(BLE_START_LAST)
   bluetooth_interface.begin(BLE_NAME_PREFIX, the_mesh.getNodePrefs()->node_name, the_mesh.getBLEPin());
   interface_manager.addInterface(InterfaceType::Bluetooth, &bluetooth_interface);
 #endif
@@ -264,7 +264,7 @@ void setup() {
 #else
     WiFi.begin(wifi_ssid, wifi_pwd);
 #endif
-#if defined(ESP32) && defined(BLE_PIN_CODE)
+#if defined(ESP32) && defined(BLE_PIN_CODE) && defined(WIFI_NO_SLEEP)
     // Bluetooth and WiFi share one radio: with the default modem sleep the node stops answering on the network
     // (the router cannot even resolve its address) while Bluetooth is active, so keep the WiFi side awake.
     WiFi.setSleep(false);
@@ -286,6 +286,11 @@ void setup() {
     interface_manager.addInterface(InterfaceType::Web, &web_interface);
   }
 #endif
+#endif
+
+#if defined(BLE_PIN_CODE) && defined(BLE_START_LAST)
+  bluetooth_interface.begin(BLE_NAME_PREFIX, the_mesh.getNodePrefs()->node_name, the_mesh.getBLEPin());
+  interface_manager.addInterface(InterfaceType::Bluetooth, &bluetooth_interface);
 #endif
 
 // add usb interface
