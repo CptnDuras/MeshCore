@@ -66,15 +66,14 @@
 
   // What one run may ask of the browser. The node's own page keeps these generous; a public page sets tighter ones (Plan.setLimits).
   // maxSites: repeaters plus planned sites in one run (0 = no limit); maxNew: suggested sites per run (0 = no limit); maxCandidates: places tried per search (0 = the engine's own).
-  // maxThreads: Web Workers per run (at most 6; each holds a copy of the terrain, so a public page keeps this low).
-  var limits = { maxTiles: 400, maxReachKm: 300, maxSites: 0, maxNew: 0, maxCandidates: 0, maxThreads: 6 };
+  var limits = { maxTiles: 400, maxReachKm: 300, maxSites: 0, maxNew: 0, maxCandidates: 0 };
 
   // Where the work happens. On the node's page the browser does it; the planner service replaces this with calls to its Lambda (setBackend).
   var backend = {
     // extra: { accept(site) -> Promise<bool> } is a rule a candidate site must pass (land, roads); it runs here, in the page
     run: function (req, onProgress, extra) {
       // the repeaters are spread over Web Workers (one fewer than the processors, at most 6); a long reach is capped here, the full planner has no such cap
-      var threads = Math.max(2, Math.min(limits.maxThreads, (navigator.hardwareConcurrency || 4) - 1));   // each worker holds its own copy of the terrain
+      var threads = Math.max(2, Math.min(6, (navigator.hardwareConcurrency || 4) - 1));
       return root.Planrun.run(req, fetchTile, onProgress, { maxTiles: limits.maxTiles, maxReachKm: limits.maxReachKm, maxCandidates: limits.maxCandidates || undefined,
         makePool: root.PoolWeb ? root.PoolWeb.make(threads) : null, accept: extra && extra.accept });
     },
