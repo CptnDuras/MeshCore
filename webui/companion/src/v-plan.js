@@ -64,18 +64,13 @@
     return out;
   }
 
-  // What one run may ask of the browser. The node's own page keeps these generous; a public page sets tighter ones (Plan.setLimits).
-  // maxSites: repeaters plus planned sites in one run (0 = no limit); maxNew: suggested sites per run (0 = no limit); maxCandidates: places tried per search (0 = the engine's own).
-  var limits = { maxTiles: 400, maxReachKm: 300, maxSites: 0, maxNew: 0, maxCandidates: 0 };
-
   // Where the work happens. On the node's page the browser does it; the planner service replaces this with calls to its Lambda (setBackend).
   var backend = {
     // extra: { accept(site) -> Promise<bool> } is a rule a candidate site must pass (land, roads); it runs here, in the page
     run: function (req, onProgress, extra) {
       // the repeaters are spread over Web Workers (one fewer than the processors, at most 6); a long reach is capped here, the full planner has no such cap
       var threads = Math.max(2, Math.min(6, (navigator.hardwareConcurrency || 4) - 1));
-      return root.Planrun.run(req, fetchTile, onProgress, { maxTiles: limits.maxTiles, maxReachKm: limits.maxReachKm, maxCandidates: limits.maxCandidates || undefined,
-        makePool: root.PoolWeb ? root.PoolWeb.make(threads) : null, accept: extra && extra.accept });
+      return root.Planrun.run(req, fetchTile, onProgress, { maxTiles: 400, maxReachKm: 300, makePool: root.PoolWeb ? root.PoolWeb.make(threads) : null, accept: extra && extra.accept });
     },
     link: function (req) { return root.Planrun.link(req, fetchTile); },
     relays: function (req, onProgress, extra) { return root.Planrun.relays(req, fetchTile, onProgress, { maxTiles: 400, accept: extra && extra.accept }); }
@@ -155,8 +150,6 @@
   async function go(count) {
     if (busy) return;
     var sites = active(); if (!count && !sites.length) { UI.toast('Add a site, or wait for repeaters with a position to be heard', 'bad'); return; }
-    if (limits.maxSites && sites.length > limits.maxSites) { UI.toast('This planner works on up to ' + limits.maxSites + ' sites at a time; switch some off (you have ' + sites.length + ')', 'bad'); return; }
-    if (limits.maxNew && count > limits.maxNew) count = limits.maxNew;
     liveStop(); links = []; marks = []; relayRun = null;
     var vb = map.bounds(), centre = count && P.area === 'radius' && !backend.remote ? searchCentre() : null;
     var req = { sites: sites.map(asSite), p: params(), repeater: { h: +P.repH, dbm: +P.repDbm, gain: +P.repGain, cable: +P.cable }, reachKm: +P.reach, detail: P.detail, count: count, link: P.link, view: vb,
@@ -754,6 +747,6 @@
   }
   function show() { setTimeout(function () { map.redraw(); refresh(); }, 30); }
 
-  root.Plan = { run: function (n) { return go(n); }, load: function (text) { applyPlan(parsePlan(text)); }, setBackend: function (b) { backend = b; }, setLimits: function (l) { Object.assign(limits, l); }, file: planFile, parse: parsePlan, apply: applyPlan, state: function () { return { run: run, P: P, mine: mine, links: links, live: !!live, relay: relayRun, centre: searchCentre() }; } };
+  root.Plan = { run: function (n) { return go(n); }, load: function (text) { applyPlan(parsePlan(text)); }, setBackend: function (b) { backend = b; }, file: planFile, parse: parsePlan, apply: applyPlan, state: function () { return { run: run, P: P, mine: mine, links: links, live: !!live, relay: relayRun, centre: searchCentre() }; } };
   App.register({ id: 'plan', title: 'Planner', icon: 'antenna', mount: mount, show: show });
 })(window);
