@@ -60,7 +60,11 @@ public:
     display.drawXbm((display.width() - logoWidth) / 2, 3, meshcore_logo, logoWidth, 13);
 
     // meshcore website
+#ifdef WITH_WEBUI
+    const char* website = "XeroKuhl edition";
+#else
     const char* website = "https://meshcore.io";
+#endif
     display.setColor(UIColor::primary_txt);
     display.setTextSize(1);
     uint16_t websiteWidth = display.getTextWidth(website);
