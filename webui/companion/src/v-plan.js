@@ -67,7 +67,8 @@
   // What one run may ask of the browser. The node's own page keeps these generous; a public page sets tighter ones (Plan.setLimits).
   // maxSites: repeaters plus planned sites in one run (0 = no limit); maxNew: suggested sites per run (0 = no limit); maxCandidates: places tried per search (0 = the engine's own).
   // maxThreads: Web Workers per run (at most 6; each holds a copy of the terrain, so a public page keeps this low).
-  var limits = { maxTiles: 400, maxReachKm: 300, maxSites: 0, maxNew: 0, maxCandidates: 0, maxThreads: 6 };
+  // capNote: what to say after "This page stops at N" when the reach was cut short.
+  var limits = { maxTiles: 400, maxReachKm: 300, maxSites: 0, maxNew: 0, maxCandidates: 0, maxThreads: 6, capNote: 'the full planner on xerokuhl.com goes further.' };
 
   // Where the work happens. On the node's page the browser does it; the planner service replaces this with calls to its Lambda (setBackend).
   var backend = {
@@ -172,7 +173,7 @@
       meshLinks();
       say(r.used + ' repeater' + (r.used === 1 ? '' : 's') + (r.skipped ? ' (' + r.skipped + ' too far from the map view were left out)' : '') + ' cover about ' + fmtArea(r.covKm2) + (count ? '. ' + r.picks.length + ' site' + (r.picks.length === 1 ? '' : 's') + ' suggested.' : '.') +
         ' Reach used: ' + fmtKm(r.reachKm) + (+P.reach > 0 ? '' : ' (from the signal budget)') + '.' +
-        (r.capped ? ' This page stops at ' + fmtKm(r.reachKm) + '; the full planner on xerokuhl.com goes further.' : '') +
+        (r.capped ? ' This page stops at ' + fmtKm(r.reachKm) + (limits.capNote ? '; ' + limits.capNote : '.') : '') +
         (r.resM > 250 ? ' The area is large, so terrain is sampled every ' + fmtM(r.resM) + ' and small hills are missed. Zoom in for detail.' : '') + (rule ? ruleNote(rule) : ''));
       paint(); markers(); listPicks(); heardCheck(r.heard);
       if (count && !r.picks.length) resultsEl.appendChild(el('p', { class: 'dim', text: 'No place in view adds coverage and can reach a repeater. Move the map, lower the signal margin, or turn off "must reach a repeater".' }));
