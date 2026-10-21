@@ -9,7 +9,6 @@
     '    ev = Geo.makeEvaluator({ z: d.z, x0: d.x0, y0: d.y0, w: d.w, h: d.h, data: f }, m.grid, m.p); postMessage({ type: "ready" }); }',
     '  else if (m.type === "add") { ev.add(m.site); postMessage({ type: "added" }); }',
     '  else if (m.type === "collect") { var b = ev.collect(); postMessage({ type: "best", best: b }, [b.buffer]); }',
-    '  else if (m.type === "map") { var q = ev.map(m.site); postMessage({ type: "map", id: m.id, map: q }, [q.buffer]); }',
     '  else if (m.type === "cover") { var c = ev.cover(m.site); postMessage({ type: "cover", id: m.id, cover: c }, [c.buffer]); } };'
   ].join('\n');
 
@@ -57,11 +56,6 @@
             for (var j = 1; j < all.length; j++) for (var q = 0; q < out.length; q++) if (all[j][q] > out[q]) out[q] = all[j][q];
             return out;
           });
-        },
-        // each site's own margin map (a signed byte per cell), in the order given
-        maps: function (sites, onDone) {
-          var out = new Array(sites.length), done = 0;
-          return runAll(sites.length, function (id) { return { type: 'map', id: id, site: sites[id] }; }, function (m) { out[m.id] = m.map; done++; if (onDone) onDone(done); }).then(function () { return out; });
         },
         covers: function (sites, onDone) {
           var out = new Array(sites.length), done = 0;
