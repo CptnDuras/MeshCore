@@ -264,6 +264,11 @@ void setup() {
 #else
     WiFi.begin(wifi_ssid, wifi_pwd);
 #endif
+#if defined(ESP32) && defined(BLE_PIN_CODE)
+    // Bluetooth and WiFi share one radio: with the default modem sleep the node stops answering on the network
+    // (the router cannot even resolve its address) while Bluetooth is active, so keep the WiFi side awake.
+    WiFi.setSleep(false);
+#endif
     wifi_interface.begin(TCP_PORT);
     interface_manager.addInterface(InterfaceType::WiFi, &wifi_interface);
   } else {
