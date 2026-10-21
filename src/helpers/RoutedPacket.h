@@ -133,11 +133,11 @@ enum SendStep : uint8_t {
 };
 
 /**
- * Which way to send a message: the cached path if there is one; else, for the first `routed_tries` attempts, by the route tables; else a
- * flood. The app counts attempts and resets the cached path after failures, which is what steps a message down this list.
+ * Which way to send a message: the cached path if there is one, for the first `direct_tries` attempts, then a flood; with no cached path, for
+ * the first `routed_tries` attempts by the route tables, then a flood. The app counts the attempts, which is what steps a message down this list.
  */
-static inline SendStep chooseSendStep(bool has_cached_path, uint8_t attempt, uint8_t routed_tries) {
-  if (has_cached_path) return SEND_CACHED;
+static inline SendStep chooseSendStep(bool has_cached_path, uint8_t attempt, uint8_t routed_tries, uint8_t direct_tries = 1) {
+  if (has_cached_path) return attempt < direct_tries ? SEND_CACHED : SEND_FLOOD;   // a cached path that did not deliver is not trusted again: flood, which also brings back a fresh path
   return attempt < routed_tries ? SEND_ROUTED : SEND_FLOOD;
 }
 

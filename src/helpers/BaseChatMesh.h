@@ -48,6 +48,10 @@ public:
 #ifndef MESH_ROUTED_TRIES
   #define MESH_ROUTED_TRIES  2
 #endif
+// A cached path is tried this many times for a message; a retry after that floods instead, so a stale path cannot keep a message from arriving.
+#ifndef MESH_DIRECT_TRIES
+  #define MESH_DIRECT_TRIES  1
+#endif
 #ifndef MESH_HOME_CACHE
   #define MESH_HOME_CACHE  64
 #endif

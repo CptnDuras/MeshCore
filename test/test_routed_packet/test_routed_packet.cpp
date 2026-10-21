@@ -250,8 +250,14 @@ TEST(RoutedForward, ADestinationNobodyAdvertisesIsDroppedAtTheFirstRepeater) {
 
 // ---- the order a message is sent in ----
 
-TEST(SendStep, ACachedPathAlwaysComesFirst) {
-    for (int attempt = 0; attempt < 4; attempt++) EXPECT_EQ(SEND_CACHED, chooseSendStep(true, attempt, 2)) << attempt;
+TEST(SendStep, ACachedPathIsTriedOnceThenARetryFloods) {
+    EXPECT_EQ(SEND_CACHED, chooseSendStep(true, 0, 2));
+    for (int attempt = 1; attempt < 4; attempt++) EXPECT_EQ(SEND_FLOOD, chooseSendStep(true, attempt, 2)) << attempt;
+}
+
+TEST(SendStep, TheNumberOfCachedTriesCanBeRaised) {
+    EXPECT_EQ(SEND_CACHED, chooseSendStep(true, 1, 2, 2));
+    EXPECT_EQ(SEND_FLOOD, chooseSendStep(true, 2, 2, 2));
 }
 
 TEST(SendStep, WithoutACachedPathTheRouteTablesGetTheFirstTriesThenAFlood) {

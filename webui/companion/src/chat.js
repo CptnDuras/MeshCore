@@ -152,6 +152,7 @@
       items.push({ label: 'Copy text', icon: 'copy', run: function () { UI.copy(m.text); } });
       items.push({ label: 'Details', icon: 'info', run: function () { details(m); } });
       if (m.me && (m.status === 'failed' || m.status === 'unconfirmed')) items.push({ label: 'Send again', icon: 'refresh', run: function () { resend(m); } });
+      if (m.me && opts.kind !== 'channel' && m.status !== 'delivered' && m.status !== 'sending') items.push({ label: 'Send by flood', icon: 'refresh', run: function () { resend(m, true); } });
       items.push({ sep: true });
       items.push({ label: 'Delete from this browser', icon: 'trash', danger: true, run: function () {
         S.convs[conv] = (S.convs[conv] || []).filter(function (x) { return x !== m; }); W.persist(); render();
@@ -262,9 +263,9 @@
         }
       }
     }
-    async function resend(m) {
+    async function resend(m, flood) {
       if (opts.kind === 'channel') { S.convs[conv] = S.convs[conv].filter(function (x) { return x !== m; }); await W.sendChannel(opts.channelIdx, m.text, { replyTo: m.replyTo }); }
-      else { m.tries = 0; await W.sendDm(conv, m.text, m); }
+      else { m.tries = flood ? 1 : 0; await W.sendDm(conv, m.text, m); }   // the node sends a retry (attempt 1 or more) by flood instead of the cached path
     }
 
     offs.push(W.bus.on('msg', function (e) { if (e.conv === conv) { render(); if (e.incoming && S.active === conv && !document.hidden) W.markRead(conv); } }));

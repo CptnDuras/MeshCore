@@ -61,9 +61,9 @@ public:
 
     // meshcore website
 #ifdef WITH_WEBUI
-    const char* website = "XeroKuhl edition";
+    const char* website = "XeroKuhl WiFi edition";
 #else
-    const char* website = "https://meshcore.io";
+    const char* website = "XeroKuhl edition";
 #endif
     display.setColor(UIColor::primary_txt);
     display.setTextSize(1);

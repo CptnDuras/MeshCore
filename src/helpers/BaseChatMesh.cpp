@@ -479,8 +479,9 @@ int  BaseChatMesh::sendMessage(const ContactInfo& recipient, uint32_t timestamp,
   uint32_t t = _radio->getEstAirtimeFor(pkt->getRawLength());
 
   int rc;
-  if (recipient.out_path_len == OUT_PATH_UNKNOWN) {
-    if (mesh::chooseSendStep(false, attempt, MESH_ROUTED_TRIES) == mesh::SEND_ROUTED && sendRoutedTo(recipient, pkt, 0)) {   // no cached path: the route tables, for the first tries
+  bool has_path = recipient.out_path_len != OUT_PATH_UNKNOWN;
+  if (!has_path || mesh::chooseSendStep(true, attempt, MESH_ROUTED_TRIES, MESH_DIRECT_TRIES) != mesh::SEND_CACHED) {
+    if (!has_path && mesh::chooseSendStep(false, attempt, MESH_ROUTED_TRIES) == mesh::SEND_ROUTED && sendRoutedTo(recipient, pkt, 0)) {   // no cached path: the route tables, for the first tries
       txt_send_timeout = futureMillis(est_timeout = calcFloodTimeoutMillisFor(t));   // as long as a flood: we do not know how many hops
       rc = MSG_SEND_SENT_DIRECT;
     } else {
@@ -526,8 +527,9 @@ int  BaseChatMesh::sendCommandData(const ContactInfo& recipient, uint32_t timest
 
   uint32_t t = _radio->getEstAirtimeFor(pkt->getRawLength());
   int rc;
-  if (recipient.out_path_len == OUT_PATH_UNKNOWN) {
-    if (mesh::chooseSendStep(false, attempt, MESH_ROUTED_TRIES) == mesh::SEND_ROUTED && sendRoutedTo(recipient, pkt, 0)) {
+  bool has_path = recipient.out_path_len != OUT_PATH_UNKNOWN;
+  if (!has_path || mesh::chooseSendStep(true, attempt, MESH_ROUTED_TRIES, MESH_DIRECT_TRIES) != mesh::SEND_CACHED) {
+    if (!has_path && mesh::chooseSendStep(false, attempt, MESH_ROUTED_TRIES) == mesh::SEND_ROUTED && sendRoutedTo(recipient, pkt, 0)) {
       txt_send_timeout = futureMillis(est_timeout = calcFloodTimeoutMillisFor(t));
       rc = MSG_SEND_SENT_DIRECT;
     } else {
