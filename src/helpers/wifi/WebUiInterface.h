@@ -72,6 +72,7 @@ class WebUiInterface : public BaseSerialInterface {
   // access point and first-boot setup form
   bool _apOn = false;
   bool _apKeepsStation = false;
+  bool _apPermanent = false;
   unsigned long _apStart = 0;
   WebUiSetupSaveFn _onSave = nullptr;
   bool _savePending = false;
@@ -89,7 +90,8 @@ public:
   // access point. Open to anyone in radio range until saved or WEBUI_AP_MAX_MS passes, then the AP shuts off.
   void beginSetup(uint16_t port, WebUiSetupSaveFn onSave);
   // Raises "MeshNode-XXXX". keepStation: leave the station connection attempts running (recovery mode).
-  void startAccessPoint(bool keepStation);
+  // permanent: the node's chosen WiFi mode, never closed by the time limit. password: 8 to 32 characters, else the default.
+  void startAccessPoint(bool keepStation, bool permanent = false, const char* password = nullptr);
   bool accessPointOn() const { return _apOn; }
 
   void enable() override;

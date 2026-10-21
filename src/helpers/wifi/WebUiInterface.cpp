@@ -25,6 +25,16 @@ void WebUiInterface::addOriginCheck() {
   });
 }
 
+// WEBUI_AP_MODE (V4 web builds): the node can be its own access point, so the WiFi name may be left empty
+#ifdef WEBUI_AP_MODE
+  #define SETUP_SSID_FIELD "<label>WiFi name</label><input name=ssid maxlength=32 autocomplete=off>" \
+                           "<small>Leave empty to keep this node as its own WiFi (MeshNode-XXXX) and connect to it directly.</small>"
+  #define SETUP_SSID_MIN 0
+#else
+  #define SETUP_SSID_FIELD "<label>WiFi name</label><input name=ssid maxlength=32 required autocomplete=off>"
+  #define SETUP_SSID_MIN 1
+#endif
+
 static const char SETUP_PAGE[] PROGMEM =
   "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
   "<title>Node setup</title><style>body{font:16px system-ui,sans-serif;max-width:26em;margin:2em auto;padding:0 1em}"
@@ -33,7 +43,7 @@ static const char SETUP_PAGE[] PROGMEM =
   "<h1>Node setup</h1><p>Give the node your WiFi and choose the password for its web page. It reboots and joins your WiFi; "
   "then open its address from there and sign in as <b>admin</b>.</p>"
   "<form method=post action=/save>"
-  "<label>WiFi name</label><input name=ssid maxlength=32 required autocomplete=off>"
+  SETUP_SSID_FIELD
   "<label>WiFi password</label><input name=wpw maxlength=63 type=password autocomplete=off><small>Leave empty for an open network.</small>"
   "<label>Web page password</label><input name=webpw minlength=8 maxlength=32 type=password required autocomplete=off>"
   "<small>8 to 32 characters.</small><br><button>Save and reboot</button></form></body></html>";
@@ -53,8 +63,8 @@ void WebUiInterface::beginSetup(uint16_t port, WebUiSetupSaveFn onSave) {
   _server->on("/save", HTTP_POST, [this](AsyncWebServerRequest* r) {
     auto val = [r](const char* k) { return r->hasParam(k, true) ? r->getParam(k, true)->value() : String(); };
     String ssid = val("ssid"), wpw = val("wpw"), webpw = val("webpw");
-    if (ssid.length() < 1 || ssid.length() > 32 || wpw.length() > 63 || webpw.length() < 8 || webpw.length() > 32) {
-      r->send(400, "text/plain", "Check the lengths: WiFi name 1-32, WiFi password up to 63, web password 8-32.");
+    if (ssid.length() < SETUP_SSID_MIN || ssid.length() > 32 || wpw.length() > 63 || webpw.length() < 8 || webpw.length() > 32) {
+      r->send(400, "text/plain", "Check the lengths: WiFi name 1-32 (may be empty on boards that can be their own WiFi), WiFi password up to 63, web password 8-32.");
       return;
     }
     xSemaphoreTake(_mux, portMAX_DELAY);
@@ -62,22 +72,25 @@ void WebUiInterface::beginSetup(uint16_t port, WebUiSetupSaveFn onSave) {
     _savePending = true;
     xSemaphoreGive(_mux);
     r->send(200, "text/html", "<!doctype html><meta name=viewport content='width=device-width'><body style='font:16px system-ui;margin:2em'>"
-                              "Saved. The node is rebooting and will join your WiFi.");
+                              + String(ssid.length() ? "Saved. The node is rebooting and will join your WiFi."
+                                                     : "Saved. The node is rebooting and will stay as its own WiFi, MeshNode-XXXX. Join it and open http://192.168.4.1/"));
   });
   _server->onNotFound([](AsyncWebServerRequest* r) { r->redirect("/"); });
   _server->begin();
 }
 
-void WebUiInterface::startAccessPoint(bool keepStation) {
+void WebUiInterface::startAccessPoint(bool keepStation, bool permanent, const char* password) {
   if (_apOn) return;
   uint8_t mac[6];
   WiFi.macAddress(mac);
   char name[20];
   snprintf(name, sizeof(name), "MeshNode-%02X%02X", mac[4], mac[5]);
+  size_t pl = password ? strlen(password) : 0;
   WiFi.mode(keepStation ? WIFI_AP_STA : WIFI_AP);
-  WiFi.softAP(name, WEBUI_AP_PASSWORD);
+  WiFi.softAP(name, pl >= 8 && pl <= 32 ? password : WEBUI_AP_PASSWORD);   // WPA2 needs at least 8 characters
   _apOn = true;
   _apKeepsStation = keepStation;
+  _apPermanent = permanent;
   _apStart = millis();
 }
 
@@ -176,7 +189,7 @@ void WebUiInterface::loop() {
   }
   if (_apOn) {
     // setup AP: closes after the time limit. Recovery AP: closes as soon as the station side is back.
-    bool timeUp = !_apKeepsStation && millis() - _apStart > WEBUI_AP_MAX_MS;
+    bool timeUp = !_apPermanent && !_apKeepsStation && millis() - _apStart > WEBUI_AP_MAX_MS;
     bool stationBack = _apKeepsStation && WiFi.status() == WL_CONNECTED;
     if (timeUp || stationBack) {
       WiFi.softAPdisconnect(true);

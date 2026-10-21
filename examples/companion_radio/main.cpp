@@ -134,6 +134,11 @@ void halt() {
   char wifi_pwd[64] = WIFI_PWD;
   bool wifi_was_connected = false;
   bool wifi_enabled = false;   // set at boot from prefs; false also when the effective SSID is blank
+  #ifdef WEBUI_AP_MODE
+  bool wifi_ap_mode = false;   // set at boot from prefs: be an access point (MeshNode-XXXX) instead of joining a network
+  #else
+  static const bool wifi_ap_mode = false;
+  #endif
 #endif
 
 #if defined(WITH_WEBUI) && defined(ENABLE_WIFI_INTERFACE)
@@ -143,6 +148,9 @@ static void web_setup_saved(const char* ssid, const char* wifiPwd, const char* w
   StrHelper::strncpy(p->wifi_ssid, ssid, sizeof(p->wifi_ssid));
   StrHelper::strncpy(p->wifi_pwd, wifiPwd, sizeof(p->wifi_pwd));
   StrHelper::strncpy(p->web_pwd, webPwd, sizeof(p->web_pwd));
+#ifdef WEBUI_AP_MODE
+  p->wifi_ap = ssid[0] ? 0 : 1;   // no WiFi name given: the node is its own WiFi
+#endif
   p->wifi_enabled = 1;
   the_mesh.savePrefs();
   web_reboot_at = millis() + 2000;
@@ -236,7 +244,10 @@ void setup() {
   }
   // only start wifi if enabled and ssid is not empty
   wifi_enabled = the_mesh.getNodePrefs()->wifi_enabled;
-  if (wifi_enabled && wifi_ssid[0]) {
+#ifdef WEBUI_AP_MODE
+  wifi_ap_mode = wifi_enabled && the_mesh.getNodePrefs()->wifi_ap;
+#endif
+  if (wifi_enabled && wifi_ssid[0] && !wifi_ap_mode) {
 #if defined(ESP32)
     board.setInhibitSleep(true);   // prevent sleep when WiFi is active
     WiFi.setAutoReconnect(true);
@@ -278,10 +289,13 @@ void setup() {
   if (wifi_enabled) {
     if (the_mesh.getNodePrefs()->web_pwd[0]) {
       web_interface.begin(WEBUI_PORT, WEBUI_USER, the_mesh.getNodePrefs()->web_pwd);
+#ifdef WEBUI_AP_MODE
+      if (wifi_ap_mode) web_interface.startAccessPoint(false, true, the_mesh.getNodePrefs()->ap_pwd);   // stays up: join it and open 192.168.4.1
+#endif
     } else {
       // not configured yet: an access point with a setup form (WiFi name and password, web password)
       web_interface.beginSetup(WEBUI_PORT, web_setup_saved);
-      web_interface.startAccessPoint(wifi_ssid[0] != 0);
+      web_interface.startAccessPoint(wifi_ssid[0] != 0 && !wifi_ap_mode, wifi_ap_mode, wifi_ap_mode ? the_mesh.getNodePrefs()->ap_pwd : nullptr);
     }
     interface_manager.addInterface(InterfaceType::Web, &web_interface);
   }
@@ -351,7 +365,7 @@ void loop() {
   if (web_reboot_at && millis() > web_reboot_at) board.reboot();
   // web page set up but the home WiFi never came up (wrong password, moved house): raise the access point so the
   // page, which is reachable at 192.168.4.1 with the web password, can fix the WiFi settings through its console
-  if (wifi_enabled && the_mesh.getNodePrefs()->web_pwd[0] && !web_interface.accessPointOn() &&
+  if (wifi_enabled && !wifi_ap_mode && the_mesh.getNodePrefs()->web_pwd[0] && !web_interface.accessPointOn() &&
       millis() > WEBUI_RECOVERY_AP_MS && WiFi.status() != WL_CONNECTED) {
     web_interface.startAccessPoint(true);
   }

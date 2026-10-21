@@ -57,6 +57,8 @@ public:
   char wifi_pwd[64] = {0};
   uint8_t wifi_enabled = 1; // enabled by default to allow wifi only builds to work. wifi won't be started if ssid is empty
   char web_pwd[33] = {0};   // web UI password (WITH_WEBUI builds); empty = web UI off. Stored in the keyed wifi section, so the legacy binary layout is untouched
+  uint8_t wifi_ap = 0;      // WITH_WEBUI builds: 1 = do not join a network, be an access point (MeshNode-XXXX) the web page is reached through
+  char ap_pwd[33] = {0};    // key of that access point (8 to 32 characters); empty = the built-in default
   // use ssid from prefs, or fallback to ssid from build flags
   const char* getWifiSSID() const { return wifi_ssid[0] ? wifi_ssid : WIFI_SSID; }
 #endif
@@ -186,6 +188,8 @@ private:
       def("pwd", _parent->wifi_pwd, sizeof(_parent->wifi_pwd));
       def("enabled", _parent->wifi_enabled);
       def("webpwd", _parent->web_pwd, sizeof(_parent->web_pwd));
+      def("ap", _parent->wifi_ap);
+      def("appwd", _parent->ap_pwd, sizeof(_parent->ap_pwd));
     }
   public:
     WiFiPrefs(NodePrefs* parent) : _parent(parent) { }

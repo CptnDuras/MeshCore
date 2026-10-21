@@ -304,7 +304,11 @@ public:
       display.drawTextCentered(display.width() / 2, 80, tmp);
       #endif
       #ifdef ENABLE_WIFI_INTERFACE
+        #ifdef WEBUI_AP_MODE
+        IPAddress ip = (WiFi.getMode() == WIFI_MODE_AP) ? WiFi.softAPIP() : WiFi.localIP();   // the node's own WiFi shows its own address
+        #else
         IPAddress ip = WiFi.localIP();
+        #endif
         snprintf(tmp, sizeof(tmp), "IP: %d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
         display.setTextSize(1);
         display.drawTextCentered(display.width() / 2, 32, tmp);

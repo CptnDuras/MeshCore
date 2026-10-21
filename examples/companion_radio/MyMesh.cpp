@@ -2281,9 +2281,41 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp, char*
     strcpy(reply, "> web UI off (reboot to apply)");
     return true;
   }
+#ifdef WEBUI_AP_MODE
+  if (memcmp(command, "set wifi.ap ", 12) == 0) {
+    _prefs.wifi_ap = atoi(&command[12]) ? 1 : 0;
+    savePrefs();
+    sprintf(reply, _prefs.wifi_ap ? "> access point mode on: the node is its own WiFi, MeshNode-XXXX (reboot to apply)"
+                                  : "> access point mode off: the node joins wifi.ssid (reboot to apply)");
+    return true;
+  }
+  if (strcmp(command, "get wifi.ap") == 0) {
+    sprintf(reply, "> %d", _prefs.wifi_ap);
+    return true;
+  }
+  if (memcmp(command, "set wifi.ap.pwd ", 16) == 0) {
+    const char* pw = &command[16];
+    if (strlen(pw) < 8 || strlen(pw) >= sizeof(_prefs.ap_pwd)) {
+      strcpy(reply, "Error, password must be 8 to 32 characters");
+    } else {
+      StrHelper::strncpy(_prefs.ap_pwd, pw, sizeof(_prefs.ap_pwd));
+      savePrefs();
+      strcpy(reply, "> access point password set (reboot to apply)");
+    }
+    return true;
+  }
+  if (strcmp(command, "get wifi.ap.pwd") == 0) {
+    sprintf(reply, "> %s", _prefs.ap_pwd[0] ? _prefs.ap_pwd : "(default)");
+    return true;
+  }
+#endif
   if (strcmp(command, "get web.status") == 0) {
     if (!_prefs.web_pwd[0]) {
       strcpy(reply, "> off (set web.pwd to enable)");
+#ifdef WEBUI_AP_MODE
+    } else if (_prefs.wifi_ap) {
+      sprintf(reply, "> on, access point MeshNode-XXXX: join it and open http://%s:%d/ user admin", WiFi.softAPIP().toString().c_str(), WEBUI_PORT);
+#endif
     } else if (WiFi.status() == WL_CONNECTED) {
       sprintf(reply, "> on, http://%s:%d/ user admin", WiFi.localIP().toString().c_str(), WEBUI_PORT);
     } else {
