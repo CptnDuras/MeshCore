@@ -172,18 +172,36 @@
   }
   // history kept on the node: merged into the conversations without touching unread counts or sounds.
   // A node without the log answers with an error, and the page just carries on with what the browser has.
+  // The order of a conversation is the order the messages arrived, never their timestamps: a timestamp is the sender's clock (or this node's, for what
+  // you sent), and a clock that is wrong would otherwise move messages out of place and get the wrong ones trimmed.
   async function loadHistory() {
-    var first = 0, added = 0;
+    var first = 0, added = 0, byConv = {};
     for (;;) {
       var h = await req(MC.enc.getHistory(first), ['history']);
-      h.recs.forEach(function (r) { if (mergeRecord(r)) added++; });
+      h.recs.forEach(function (r) { var m = recordMessage(r); if (m) (byConv[m.conv] = byConv[m.conv] || []).push(m.msg); });
       first += h.recs.length;
       if (!h.recs.length || first >= h.total) break;
     }
-    if (added) { for (var k in S.convs) S.convs[k].sort(function (a, b) { return a.ts - b.ts; }); persist(); bus.emit('history'); }
+    for (var k in byConv) added += mergeInOrder(k, byConv[k]);
+    if (added) { persist(); bus.emit('history'); }
   }
-  function mergeRecord(r) {
-    if (r.txt !== 0 || /^r:[0-9a-f]{4}:[0-9a-f]{2}$/.test(r.text)) return false;
+  function sameMsg(x, m) { return !!x.me === !!m.me && x.ts === m.ts && x.text === m.text && (m.me || x.who === m.who); }
+  // Merges the node's messages for one conversation (oldest first) into what the browser has, keeping both orders: a message the browser lacks goes
+  // straight after the node's previous message, wherever that sits in the browser's list.
+  function mergeInOrder(conv, msgs) {
+    var list = S.convs[conv] = S.convs[conv] || [], at = -1, added = 0;
+    msgs.forEach(function (m) {
+      var idx = -1; for (var i = 0; i < list.length; i++) if (sameMsg(list[i], m)) { idx = i; break; }
+      if (idx >= 0) { if (idx > at) at = idx; return; }
+      m.id = m.id || (Date.now().toString(36) + Math.random().toString(36).slice(2, 7));
+      list.splice(++at, 0, m); added++;
+    });
+    if (list.length > 400) list.splice(0, list.length - 400);   // the oldest by arrival
+    return added;
+  }
+  // One record from the node as { conv, msg }, or null for what is not a chat message (commands, reactions).
+  function recordMessage(r) {
+    if (r.txt !== 0 || /^r:[0-9a-f]{4}:[0-9a-f]{2}$/.test(r.text)) return null;
     var conv, who = '', text = r.text, extra = {};
     if (r.channel) {
       conv = 'ch:' + r.idx;
@@ -192,12 +210,9 @@
     } else {
       var c = findContact(r.target); conv = c ? c.key : r.target; who = r.sent ? '' : (c ? c.name : r.target);
     }
-    var list = S.convs[conv] = S.convs[conv] || [];
-    if (list.some(function (x) { return !!x.me === r.sent && x.ts === r.ts && x.text === text && (r.sent || x.who === who); })) return false;
     var base = r.sent ? { me: true, channel: r.channel, text: text, ts: r.ts, status: 'sent', tries: 1 }
       : { me: false, channel: r.channel, text: text, ts: r.ts, who: who, snr: r.snr, hops: r.pathLen === 255 ? -1 : r.pathLen & 63, recvAt: r.ts };
-    addMsg(conv, Object.assign(base, extra));
-    return true;
+    return { conv: conv, msg: Object.assign(base, extra) };
   }
   function onMsg(m) {
     var conv, who = '', text = m.text, extra = {};
