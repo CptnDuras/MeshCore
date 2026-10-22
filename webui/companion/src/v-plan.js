@@ -132,7 +132,7 @@
     var out = allSites().map(function (s) {
       var m = { lat: s.lat, lon: s.lon, label: s.name, color: off[s.id] ? '#8a96a3' : s.existing ? '#c77a12' : '#2a74c9', title: s.name + (s.existing ? ' (repeater)' : ' (planned)'),
         onclick: function () { siteMenu(s); } };
-      if (live && !s.existing) { m.draggable = true; m.title += ' · drag to move'; m.ondrag = function (la, lo) { liveMove(s.id, la, lo, false); }; m.ondrop = function (la, lo) { liveMove(s.id, la, lo, true); }; }
+      if (!s.existing) { m.draggable = true; m.title += ' · drag to move'; m.ondrag = function (la, lo) { liveMove(s.id, la, lo, false); }; m.ondrop = function (la, lo) { liveMove(s.id, la, lo, true); }; }
       return m;
     });
     if (run) run.picks.forEach(function (p, i) {
@@ -300,10 +300,9 @@
     mine.forEach(function (m) { if (m.id === id) { m.lat = lat; m.lon = lon; } });
   }
   function liveMove(id, lat, lon, final) {
-    if (!live) return;
-    setSitePos(id, lat, lon);
-    if (final) { persist(); refresh(); listPicks(); }
-    if (!live.ready) return;
+    setSitePos(id, lat, lon);   // a planned site can always be dragged; live coverage, when it is on, follows it
+    if (final) { persist(); refresh(); listPicks(); if (!live) say('Moved. Estimate coverage again to see what changed.'); }
+    if (!live || !live.ready) return;
     live.pending[id] = 1;
     if (!live.busy) liveWork();
   }
@@ -427,7 +426,14 @@
     mine.push({ id: 'm:' + nextId++, name: name || 'Site ' + nextId, lat: lat, lon: lon, h: +P.repH }); persist(); refresh();
   }
 
-  // A right click (or a held touch) on the map: name a proposed repeater and put it there.
+  // A right click (or a held touch) on the map: a menu at that spot.
+  function mapMenu(lat, lon, at) {
+    UI.menu(map.el, [
+      { label: 'Add a proposed repeater here…', icon: 'plus', run: function () { nameAndAdd(lat, lon); } },
+      { label: 'Copy position', icon: 'copy', run: function () { UI.copy(lat.toFixed(6) + ', ' + lon.toFixed(6)); } }
+    ], at);
+  }
+  // Name a proposed repeater and put it there.
   function nameAndAdd(lat, lon) {
     UI.form('Add a proposed repeater here', [{ name: 'name', label: 'Name', value: 'Site ' + nextId, required: true, maxlength: 40 }], 'Add',
       lat.toFixed(5) + ', ' + lon.toFixed(5)).then(function (r) { if (r) { addSite(lat, lon, r.name.trim()); UI.toast('Added ' + r.name.trim()); } });
@@ -756,7 +762,7 @@
     var first = existing()[0] || (S.self && (S.self.lat || S.self.lon) ? S.self : null), mp = W.store.get('mcw2:map', null);
     map = Slippy.create({ lat: first ? first.lat : mp ? mp.lat : 39, lon: first ? first.lon : mp ? mp.lon : -98, z: first || mp ? 10 : 4, label: 'Planner map',
       onClick: function (lat, lon) { if (adding) { adding = false; say(''); addSite(lat, lon, 'Site ' + nextId); } },
-      onContext: nameAndAdd });
+      onContext: mapMenu });
     box.appendChild(panel); box.appendChild(map.el);
     W.bus.on('contacts', function () { if (App.current() && App.current().id === 'plan') refresh(); });
     refresh();

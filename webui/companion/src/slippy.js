@@ -102,7 +102,7 @@
     }
     var ptrs = {}, last = null, moved = 0, pinch = 0, press = 0;
     // onContext(lat, lon): a right click, or a touch held still for a moment, on the map itself (not on a marker)
-    function context(clientX, clientY) { var r = box.getBoundingClientRect(), g = fromScreen(clientX - r.left, clientY - r.top); opts.onContext(g.lat, g.lon); }
+    function context(clientX, clientY) { var r = box.getBoundingClientRect(), g = fromScreen(clientX - r.left, clientY - r.top); opts.onContext(g.lat, g.lon, { x: clientX, y: clientY }); }
     box.addEventListener('pointerdown', function (e) {
       if (e.target.closest && e.target.closest('.pin')) return;
       if (e.pointerType === 'mouse' && e.button !== 0) return;   // a right click is not the start of a drag or a tap

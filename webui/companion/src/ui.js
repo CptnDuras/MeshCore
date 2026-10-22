@@ -161,7 +161,8 @@
     return p;
   }
   // a floating action menu next to an anchor element
-  function menu(anchor, items) {
+  // at: {x, y} opens it with its top-left corner at that point on the page (a context menu) instead of under the anchor.
+  function menu(anchor, items, at) {
     var old = document.querySelector('.menu'); if (old) old.remove();
     var m = el('div', { class: 'menu', role: 'menu' });
     function close() { if (m.parentNode) m.parentNode.removeChild(m); document.removeEventListener('mousedown', away, true); document.removeEventListener('keydown', esc, true); }
@@ -175,8 +176,13 @@
     });
     document.body.appendChild(m);
     var r = anchor.getBoundingClientRect(), mw = m.offsetWidth, mh = m.offsetHeight;
-    m.style.left = Math.max(8, Math.min(innerWidth - mw - 8, r.right - mw)) + 'px';
-    m.style.top = (r.bottom + mh + 8 > innerHeight ? Math.max(8, r.top - mh - 4) : r.bottom + 4) + 'px';
+    if (at) {
+      m.style.left = Math.max(8, Math.min(innerWidth - mw - 8, at.x)) + 'px';
+      m.style.top = Math.max(8, Math.min(innerHeight - mh - 8, at.y)) + 'px';
+    } else {
+      m.style.left = Math.max(8, Math.min(innerWidth - mw - 8, r.right - mw)) + 'px';
+      m.style.top = (r.bottom + mh + 8 > innerHeight ? Math.max(8, r.top - mh - 4) : r.bottom + 4) + 'px';
+    }
     setTimeout(function () { document.addEventListener('mousedown', away, true); document.addEventListener('keydown', esc, true); }, 0);
     var f = m.querySelector('.mi'); if (f) f.focus();
     return close;
