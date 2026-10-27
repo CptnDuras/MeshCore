@@ -64,13 +64,7 @@ a **repeater hub** (sign in, status, neighbours, sensors, the routing features o
 (ping, discover, radio statistics, node console, sensors) and **Settings** (name, position, radio with presets, route
 detail, privacy, automatic adding, regions, clock, GPX export, and per-browser preferences).
 
-A **Map** of nodes with a position, and a **Planner** (`geo.js` engine, `slippy.js` map, `v-plan.js` view): it estimates what the
-repeaters you can hear cover and suggests where new ones would add the most, from terrain and a radio model (free-space loss plus
-knife-edge diffraction over the worst ridge, earth radius factor as in the MeshCore app, a flat allowance for trees and buildings). Like the app, coverage by default means a clear line of sight from the antenna to a handheld (ground below the straight line, earth curve included); paths over a ridge, 60% Fresnel clearance and a noise margin are options. Range goes to 300 km and large areas load coarser terrain instead of failing. Terrain tiles come
-from Mapterhorn over the internet, like the map tiles. It is an estimate: check a site on the ground. A plan (planned sites, which
-repeaters are used, antenna heights and the radio settings) exports to a JSON file (`app: "meshcore-planner"`) and imports back
-(the file is checked first: positions, heights and settings are validated); the map with the coverage saves as a PNG with a caption,
-legend and attribution. Message text containing
+A **Map** of nodes with a position (`v-map.js`). There is no planner in the firmware page: coverage and site planning live on xerokuhl.com. Message text containing
 coordinates or map links gets a button that opens the place on the map.
 
 Not in yet: path trace, QR codes and camera scanning (the page is served over plain http, where browsers do not
@@ -91,7 +85,5 @@ array). `gen_webui.py --check` fails if the header is stale; `--html FILE` write
   `oracle/compare_webui.py` in the meshnode repo. `oracle/test_webui_e2e.py` there drives the page in a headless browser
   against the stock companion code through a WebSocket bridge (22 checks: connect, a long contact list, channels, search, receive,
   send, delivery confirmation, hostile names, settings, console, statistics, reconnect).
-- `node test/plan_engine.js`: the planner's engine on made-up terrain (free-space loss on flat ground, a ridge's shadow, earth
-  curvature, link profiles, candidate sites, tile stitching).
 - Frame layouts that are newer than the hosted 1.17.1 firmware (the console, command 66) are checked against the
   source of this tree instead.

@@ -11,8 +11,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 SRC = ROOT / "webui/companion/src"
 OUT = ROOT / "src/helpers/wifi/WebUiPage.h"
 # order matters: later files use what earlier ones define
-SCRIPTS = ["proto.js", "crypto.js", "presets.js", "ui.js", "geo.js", "planrun.js", "pool-web.js", "slippy.js", "core.js", "split.js", "chat.js", "app.js",
-           "v-channels.js", "v-contacts.js", "v-map.js", "v-plan.js", "v-repeater.js", "v-tools.js", "v-settings.js", "boot.js"]
+SCRIPTS = ["proto.js", "crypto.js", "presets.js", "ui.js", "core.js", "split.js", "chat.js", "app.js",
+           "v-channels.js", "v-contacts.js", "v-map.js","v-repeater.js", "v-tools.js", "v-settings.js", "boot.js"]
 
 def page_text():
     html = (SRC / "index.html").read_text()
