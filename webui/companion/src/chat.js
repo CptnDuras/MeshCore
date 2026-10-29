@@ -50,7 +50,7 @@
     var thread = el('div', { class: 'thread', role: 'log', 'aria-live': 'polite', 'aria-label': 'Messages' });
     var top = el('div', { class: 'dtop' });
     var input = el('textarea', { rows: 1, placeholder: opts.canSend === false ? 'You cannot send here' : 'Message', 'aria-label': 'Message', disabled: opts.canSend === false, maxlength: MAX_PARTS * 200 });
-    var picker = el('div', { class: 'mentions', role: 'listbox', 'aria-label': 'People to mention', hidden: true });
+    var picker = el('div', { class: 'mentions', role: 'listbox', 'aria-label': 'Suggestions', hidden: true });
     var count = el('div', { class: 'count' });
     var replybar = el('div', { class: 'replybar', hidden: true });
     var sendBtn = UI.btn('', { icon: 'send', kind: 'primary', title: 'Send', onclick: submit, disabled: opts.canSend === false });
@@ -91,7 +91,7 @@
     thread.style.setProperty('--ts', W.settings.textScale);
 
     // typing @ after a space (or at the start) lists the people you can tag; the pick is written as @[Name], the form MeshCore apps use
-    var pickList = [], pickAt = 0, pickFrom = 0;
+    var pickList = [], pickAt = 0, pickFrom = 0, pickKind = 'mention';   // the popup offers people after '@' and emoji after ':ab'
     function mentionNames() {
       var seen = {}, out = [];
       function add(n) { if (n && !seen[n.toLowerCase()] && !(S.self && n === S.self.name)) { seen[n.toLowerCase()] = 1; out.push(n); } }
@@ -104,7 +104,15 @@
       var pos = input.selectionStart, m = /(^|\s)@([^@\[\]\n]{0,31})$/.exec(input.value.slice(0, pos));
       return m && m[2].charAt(0) !== ' ' ? { from: pos - m[2].length - 1, q: m[2].toLowerCase() } : null;
     }
+    // ':sm' (two letters at least, after a space or the start, so a time like 10:30 is left alone)
+    function emojiQuery() {
+      var pos = input.selectionStart, m = /(^|\s):([a-z0-9_+-]{2,30})$/i.exec(input.value.slice(0, pos));
+      return m ? { from: pos - m[2].length - 1, q: m[2] } : null;
+    }
     function showMentions() {
+      var eq = opts.canSend === false ? null : emojiQuery(), names = eq ? Emoji.find(eq.q, 8) : [];
+      if (names.length) { pickKind = 'emoji'; pickList = names; pickFrom = eq.from; pickAt = 0; paintMentions(); picker.hidden = false; return; }
+      pickKind = 'mention';
       var mq = opts.canSend === false ? null : mentionQuery(); if (!mq) { hideMentions(); return; }
       var all = mentionNames(), starts = all.filter(function (n) { return n.toLowerCase().indexOf(mq.q) === 0; });
       pickList = starts.concat(all.filter(function (n) { return starts.indexOf(n) < 0 && n.toLowerCase().indexOf(mq.q) > 0; })).slice(0, 8);
@@ -114,14 +122,15 @@
     function paintMentions() {
       UI.clear(picker);
       pickList.forEach(function (n, i) {
-        var b = el('button', { type: 'button', class: 'mi' + (i === pickAt ? ' on' : ''), role: 'option', 'aria-selected': i === pickAt ? 'true' : 'false' }, [UI.avatar(n, { cls: 'sm' }), el('span', { text: n })]);
+        var b = el('button', { type: 'button', class: 'mi' + (i === pickAt ? ' on' : ''), role: 'option', 'aria-selected': i === pickAt ? 'true' : 'false' },
+          pickKind === 'emoji' ? [el('span', { class: 'emo', text: Emoji.get(n) }), el('span', { text: ':' + n + ':' })] : [UI.avatar(n, { cls: 'sm' }), el('span', { text: n })]);
         b.addEventListener('mousedown', function (e) { e.preventDefault(); chooseMention(n); });
         picker.appendChild(b);
       });
     }
     function hideMentions() { picker.hidden = true; pickList = []; }
     function chooseMention(name) {
-      var pos = input.selectionStart, ins = '@[' + name + '] ';
+      var pos = input.selectionStart, ins = pickKind === 'emoji' ? Emoji.get(name) : '@[' + name + '] ';
       input.value = input.value.slice(0, pickFrom) + ins + input.value.slice(pos);
       input.selectionStart = input.selectionEnd = pickFrom + ins.length;
       hideMentions(); updateCount(); input.focus();

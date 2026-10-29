@@ -47,12 +47,12 @@
       return e === undefined ? all : e;
     });
   }
-  // the names that start with `prefix`, for a picker (at most `max`)
-  function find(prefix, max) {
+  // the names for a picker, at most `max`: the exact name, then those that start with `q`, then those that contain it
+  function find(q, max) {
     if (!map) load();
-    var p = String(prefix).toLowerCase(), out = [];
-    for (var k in map) if (k.indexOf(p) === 0) { out.push(k); if (out.length >= max) break; }
-    return out;
+    var p = String(q).toLowerCase(), exact = [], starts = [], inside = [];
+    for (var k in map) { var at = k.indexOf(p); if (at === 0) (k === p ? exact : starts).push(k); else if (at > 0) inside.push(k); }
+    return exact.concat(starts, inside).slice(0, max);
   }
   root.Emoji = { replace: replace, find: find, get: function (n) { if (!map) load(); return map[String(n).toLowerCase()]; } };
 })(window);
