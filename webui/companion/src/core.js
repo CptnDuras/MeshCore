@@ -108,7 +108,7 @@
   function devNow() { return Math.floor(Date.now() / 1000) + S.clockOff; }
   async function syncClock(force) {
     var t = await req(MC.enc.getTime(), ['time']), now = Math.floor(Date.now() / 1000);
-    if (force || now - t.secs > 120) { try { await req(MC.enc.setTime(now), ['ok']); t.secs = now; } catch (e) { if (force) throw e; } }
+    if (force || now - t.secs > 120) { try { await req(MC.enc.setTime(now, force), ['ok']); t.secs = now; } catch (e) { if (force) throw e; } }
     S.clockOff = t.secs - now; bus.emit('clock');
   }
   async function init(my) {

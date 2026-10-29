@@ -66,7 +66,7 @@
     getContacts: function (since) { return since ? frame(CMD.GET_CONTACTS, [word(since)]) : Uint8Array.of(CMD.GET_CONTACTS); },
     syncNext: function () { return Uint8Array.of(CMD.SYNC_NEXT); },
     getTime: function () { return Uint8Array.of(CMD.GET_TIME); },
-    setTime: function (secs) { return frame(CMD.SET_TIME, [word(secs)]); },
+    setTime: function (secs, force) { return frame(CMD.SET_TIME, force ? [word(secs), Uint8Array.of(1)] : [word(secs)]); },   // the node refuses to go back unless forced
     advert: function (flood) { return frame(CMD.ADVERT, flood ? [Uint8Array.of(1)] : []); },
     battery: function () { return Uint8Array.of(CMD.BATT); },
     getChannel: function (i) { return frame(CMD.GET_CHANNEL, [Uint8Array.of(i)]); },
