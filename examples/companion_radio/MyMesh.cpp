@@ -1024,7 +1024,13 @@ void MyMesh::begin() {
 
   resetContacts();
   _store->loadContacts(this);
+#if defined(WIFI_DEBUG_LOGGING) && WIFI_DEBUG_LOGGING && defined(ARDUINO)
+  uint32_t clock_before = getRTCClock()->getCurrentTime();
+#endif
   bootstrapRTCfromContacts();
+#if defined(WIFI_DEBUG_LOGGING) && WIFI_DEBUG_LOGGING && defined(ARDUINO)
+  Serial.printf("CLOCK: at boot %u, after contacts %u\n", (unsigned)clock_before, (unsigned)getRTCClock()->getCurrentTime());
+#endif
   addChannel("Public", PUBLIC_GROUP_PSK); // pre-configure public channel
   _store->loadChannels(this);
 #ifdef WITH_WEBUI

@@ -58,13 +58,18 @@ void BaseChatMesh::sendAckTo(const ContactInfo& dest, const uint8_t* ack_hash, u
 }
 
 void BaseChatMesh::bootstrapRTCfromContacts() {
+  // A reset loses the time, and the newest contact stamp is a good floor for it. Contacts are stamped with the clock as it was when
+  // they were heard, and they are saved, so a contact stamped while the clock was wrong would otherwise put the date back to that
+  // wrong value at every boot, even after a reflash. So never move the clock back, and ignore stamps more than a year ahead of it.
+  uint32_t now = getRTCClock()->getCurrentTime();
+  uint32_t ceiling = now + 365UL * 24 * 3600;
   uint32_t latest = 0;
   for (int i = 0; i < num_contacts; i++) {
-    if (contacts[i].lastmod > latest) {
+    if (contacts[i].lastmod > latest && contacts[i].lastmod <= ceiling) {
       latest = contacts[i].lastmod;
     }
   }
-  if (latest != 0) {
+  if (latest != 0 && latest >= now) {
     getRTCClock()->setCurrentTime(latest + 1);
   }
 }
