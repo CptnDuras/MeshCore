@@ -17,10 +17,10 @@
     return m ? { kind: 'gif', id: m[1] } : null;
   }
 
-  var MAX_PARTS = 8;   // a long message is sent as several; this keeps one paste from flooding the mesh
+  var MAX_PARTS = 5;   // a long message is sent as several; this keeps one paste from flooding the mesh
 
-  // Cuts text into pieces of at most `limit` bytes (the first `reserve` bytes shorter), at a line break or space when there is one nearby
-  // and never inside an @[Name] tag or a character.
+  // Cuts text into pieces of at most `limit` bytes (the first `reserve` bytes shorter). A word that does not fit moves whole to the next
+  // piece; only a word longer than a piece is cut. Never inside an @[Name] tag or a character.
   function splitText(text, limit, reserve) {
     var out = [], rest = String(text).trim(), lim = limit - (reserve || 0);
     while (rest) {
@@ -31,8 +31,11 @@
         if (bytes + b > lim) break; bytes += b; i += w;
       }
       if (i === 0) i = 1;
-      var head = rest.slice(0, i), nl = head.lastIndexOf('\n'), sp = head.lastIndexOf(' ');
-      var at = nl > i * 0.3 ? nl : sp > i * 0.3 ? sp : i;
+      var head = rest.slice(0, i), at = i;
+      if (!/\s/.test(rest.charAt(i))) {   // the cut would land inside a word: back up to the last space or line break that fits
+        var ws = Math.max(head.lastIndexOf(' '), head.lastIndexOf('\n'), head.lastIndexOf('\t'));
+        if (ws > 0) at = ws;
+      }
       var tag = rest.lastIndexOf('@[', at - 1);
       if (tag > 0 && rest.indexOf(']', tag) >= at) at = tag;
       out.push(rest.slice(0, at).trim()); rest = rest.slice(at).trim(); lim = limit;
