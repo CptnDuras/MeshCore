@@ -12,8 +12,8 @@ static uint32_t _atoi(const char* sp) {
   return n;
 }
 
-// debug builds: where does the internal heap go (ESP32 only, needs WIFI_DEBUG_LOGGING)
-#if defined(ESP32) && defined(WIFI_DEBUG_LOGGING) && WIFI_DEBUG_LOGGING
+// debug builds: where does the internal heap go (ESP32 only, needs -D WIFI_DIAG_LOGGING=1, off in every shipped env)
+#if defined(ESP32) && defined(WIFI_DIAG_LOGGING) && WIFI_DIAG_LOGGING
   #include <esp_heap_caps.h>
   #include <esp_rom_sys.h>
   #define HEAP_MARK(label) Serial.printf("HEAP: %-18s internal=%u largest=%u\n", label, \
@@ -174,7 +174,7 @@ static void web_setup_saved(const char* ssid, const char* wifiPwd, const char* w
 
 void setup() {
   Serial.begin(115200);
-#if defined(ESP32) && defined(WIFI_DEBUG_LOGGING) && WIFI_DEBUG_LOGGING
+#if defined(ESP32) && defined(WIFI_DIAG_LOGGING) && WIFI_DIAG_LOGGING
   heap_caps_register_failed_alloc_callback(heap_alloc_failed);
 #endif
 #if defined(ESP32) && defined(EXTMEM_MALLOC_LIMIT) && EXTMEM_MALLOC_LIMIT > 0   // 0 turns it off
@@ -193,7 +193,7 @@ void setup() {
 #ifdef DISPLAY_CLASS
   DisplayDriver* disp = NULL;
   bool display_ok = display.begin();
-#if defined(WIFI_DEBUG_LOGGING) && WIFI_DEBUG_LOGGING
+#if defined(WIFI_DIAG_LOGGING) && WIFI_DIAG_LOGGING
   Serial.printf("DISPLAY: begin() returned %d, internal heap %u\n", (int)display_ok, (unsigned)ESP.getFreeHeap());
 #endif
   if (display_ok) {
@@ -388,19 +388,19 @@ void setup() {
 }
 
 void loop() {
-#if WIFI_DEBUG_LOGGING && ARDUINO && defined(ESP32)
+#if WIFI_DIAG_LOGGING && ARDUINO && defined(ESP32)
   static unsigned long last_wifi_status = 0;
   if (millis() - last_wifi_status >= 1000) {
     last_wifi_status = millis();
     static unsigned prev_internal = 0;
     unsigned internal = (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-    WIFI_DEBUG_PRINTLN("status=%d ip=%s rssi=%d internal=%u min=%u largest=%u psram=%u up=%lus",
+    Serial.printf("DIAG: status=%d ip=%s rssi=%d internal=%u min=%u largest=%u psram=%u up=%lus\n",
       (int)WiFi.status(), WiFi.localIP().toString().c_str(), (int)WiFi.RSSI(), internal,
       (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
       (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
       (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), millis() / 1000);
     if (prev_internal && (internal + 2048 < prev_internal || prev_internal + 2048 < internal))
-      WIFI_DEBUG_PRINTLN("HEAP: internal %u -> %u (%+d)", prev_internal, internal, (int)internal - (int)prev_internal);
+      Serial.printf("DIAG: internal heap %u -> %u (%+d)\n", prev_internal, internal, (int)internal - (int)prev_internal);
     prev_internal = internal;
   }
 #endif

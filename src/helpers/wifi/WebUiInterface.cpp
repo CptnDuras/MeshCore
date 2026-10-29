@@ -6,7 +6,7 @@
 #include <ESPAsyncWebServer.h>
 #include <string.h>
 
-#if defined(WIFI_DEBUG_LOGGING) && WIFI_DEBUG_LOGGING
+#if defined(WIFI_DIAG_LOGGING) && WIFI_DIAG_LOGGING
   #include <esp_heap_caps.h>
   #define WS_DEBUG(F, ...) Serial.printf("WS: " F " (internal=%u min=%u)\n", ##__VA_ARGS__, \
     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL))
