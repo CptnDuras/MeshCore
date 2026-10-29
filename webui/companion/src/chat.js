@@ -67,7 +67,14 @@
       count.className = 'count' + (k > MAX_PARTS ? ' over' : '');
       input.style.height = 'auto'; input.style.height = Math.min(120, input.scrollHeight) + 'px';
     }
-    input.addEventListener('input', function () { updateCount(); showMentions(); });
+    // ":smile:" becomes the emoji as soon as the closing colon is typed; the text before the caret decides where the caret ends up
+    function expandEmoji() {
+      var v = input.value, r = Emoji.replace(v);
+      if (r === v) return;
+      var at = Emoji.replace(v.slice(0, input.selectionStart)).length;
+      input.value = r; input.setSelectionRange(at, at);
+    }
+    input.addEventListener('input', function () { expandEmoji(); updateCount(); showMentions(); });
     input.addEventListener('click', showMentions);
     input.addEventListener('blur', function () { setTimeout(hideMentions, 120); });
     input.addEventListener('keydown', function (e) {
