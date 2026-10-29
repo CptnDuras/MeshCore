@@ -3,10 +3,12 @@
 
 The sources are joined into one HTML page (styles and scripts inline, nothing fetched from outside), gzipped and stored as a
 byte array; the node serves it with Content-Encoding: gzip.
+Scripts and styles are minified with esbuild 0.25.0 (the output must be reproducible, so the version is pinned; set ESBUILD to
+its path, or put it on PATH). --no-minify builds the readable page instead, for debugging in a browser.
 usage: gen_webui.py              write the header
        gen_webui.py --check      exit 1 if the committed header is out of date
        gen_webui.py --html FILE  also write the assembled page as plain HTML (for the browser tests)"""
-import gzip, pathlib, sys
+import gzip, os, pathlib, shutil, subprocess, sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SRC = ROOT / "webui/companion/src"
 OUT = ROOT / "src/helpers/wifi/WebUiPage.h"
@@ -14,12 +16,23 @@ OUT = ROOT / "src/helpers/wifi/WebUiPage.h"
 SCRIPTS = ["proto.js", "crypto.js", "presets.js", "ui.js", "core.js", "split.js", "chat.js", "app.js",
            "v-channels.js", "v-contacts.js", "v-map.js","v-repeater.js", "v-tools.js", "v-settings.js", "boot.js"]
 
+def minify(code, loader):
+    exe = os.environ.get("ESBUILD") or shutil.which("esbuild")
+    if not exe: sys.exit("esbuild not found: install esbuild@0.25.0 and set ESBUILD to it, or pass --no-minify")
+    r = subprocess.run([exe, f"--loader={loader}", "--minify", "--target=es2020", "--log-level=warning"], input=code,
+                       capture_output=True, text=True)
+    if r.returncode: sys.exit("esbuild failed:\n" + r.stderr)
+    return r.stdout
+
 def page_text():
     html = (SRC / "index.html").read_text()
     assert "/*@CSS@*/" in html and "/*@JS@*/" in html, "index.html lost a placeholder"
     css = (SRC / "style.css").read_text()
     js = "\n".join((SRC / f).read_text() for f in SCRIPTS)
     assert "</script" not in js.lower(), "a script contains a closing script tag"
+    if "--no-minify" not in sys.argv:
+        css, js = minify(css, "css"), minify(js, "js")
+        assert "</script" not in js.lower(), "minifying produced a closing script tag"
     return html.replace("/*@CSS@*/", css).replace("/*@JS@*/", js)
 
 def build():

@@ -75,7 +75,9 @@ offer the camera or the clipboard API; copy and paste text instead), image messa
 The sources are in `src/`: `index.html` (template), `style.css`, and the scripts listed in order in `scripts/gen_webui.py`
 (`proto.js` codec, `crypto.js` SHA-256/HMAC, `core.js` link and messaging engine, `ui.js` toolkit, one file per view).
 After a change run `python3 scripts/gen_webui.py`, which writes `src/helpers/wifi/WebUiPage.h` (the gzipped page as a byte
-array). `gen_webui.py --check` fails if the header is stale; `--html FILE` writes the plain page for the browser tests.
+array). `gen_webui.py --check` fails if the header is stale; `--html FILE` writes the page as it ships, for the browser tests.
+Scripts and styles are minified with esbuild 0.25.0 (pinned so the header is reproducible): `npm install esbuild@0.25.0` somewhere
+outside the repo and point `ESBUILD` at its binary. `--no-minify` builds the readable page for debugging.
 
 ## Tests
 
