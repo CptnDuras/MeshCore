@@ -177,7 +177,7 @@ void setup() {
 #if defined(ESP32) && defined(WIFI_DEBUG_LOGGING) && WIFI_DEBUG_LOGGING
   heap_caps_register_failed_alloc_callback(heap_alloc_failed);
 #endif
-#if defined(ESP32) && defined(EXTMEM_MALLOC_LIMIT)
+#if defined(ESP32) && defined(EXTMEM_MALLOC_LIMIT) && EXTMEM_MALLOC_LIMIT > 0   // 0 turns it off
   // plain malloc/new of this size or more goes to PSRAM; WiFi's DMA buffers, task stacks and ISR code stay internal.
   // Bluetooth and the web server take over 80 KB of the internal heap, and WiFi stops answering when it runs out.
   if (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) > 0) heap_caps_malloc_extmem_enable(EXTMEM_MALLOC_LIMIT);
@@ -192,7 +192,11 @@ void setup() {
 
 #ifdef DISPLAY_CLASS
   DisplayDriver* disp = NULL;
-  if (display.begin()) {
+  bool display_ok = display.begin();
+#if defined(WIFI_DEBUG_LOGGING) && WIFI_DEBUG_LOGGING
+  Serial.printf("DISPLAY: begin() returned %d, internal heap %u\n", (int)display_ok, (unsigned)ESP.getFreeHeap());
+#endif
+  if (display_ok) {
     disp = &display;
     disp->startFrame();
   #ifdef ST7789
