@@ -12,6 +12,21 @@ static uint32_t _atoi(const char* sp) {
   return n;
 }
 
+// debug builds: where does the internal heap go (ESP32 only, needs WIFI_DEBUG_LOGGING)
+#if defined(ESP32) && defined(WIFI_DEBUG_LOGGING) && WIFI_DEBUG_LOGGING
+  #include <esp_heap_caps.h>
+  #include <esp_rom_sys.h>
+  #define HEAP_MARK(label) Serial.printf("HEAP: %-18s internal=%u largest=%u\n", label, \
+    (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL))
+  // runs inside the allocator: no Serial, no allocation
+  static void heap_alloc_failed(size_t size, uint32_t caps, const char* fn) {
+    esp_rom_printf("HEAP: ALLOC FAILED %u bytes caps=0x%x in %s (task %s)\n", (unsigned)size, (unsigned)caps, fn,
+      pcTaskGetName(NULL));
+  }
+#else
+  #define HEAP_MARK(label) ((void)0)
+#endif
+
 // interface manager
 #include <helpers/MultiSerialInterface.h>
 MultiSerialInterface interface_manager;
@@ -159,7 +174,17 @@ static void web_setup_saved(const char* ssid, const char* wifiPwd, const char* w
 
 void setup() {
   Serial.begin(115200);
+#if defined(ESP32) && defined(WIFI_DEBUG_LOGGING) && WIFI_DEBUG_LOGGING
+  heap_caps_register_failed_alloc_callback(heap_alloc_failed);
+#endif
+#if defined(ESP32) && defined(EXTMEM_MALLOC_LIMIT)
+  // plain malloc/new of this size or more goes to PSRAM; WiFi's DMA buffers, task stacks and ISR code stay internal.
+  // Bluetooth and the web server take over 80 KB of the internal heap, and WiFi stops answering when it runs out.
+  if (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) > 0) heap_caps_malloc_extmem_enable(EXTMEM_MALLOC_LIMIT);
+#endif
+  HEAP_MARK("setup start");
   board.begin();
+  HEAP_MARK("board.begin");
 
 #ifdef HAS_EXTERNAL_WATCHDOG
   external_watchdog.begin();
@@ -178,7 +203,9 @@ void setup() {
   }
 #endif
 
+  HEAP_MARK("display");
   if (!radio_init()) { halt(); }
+  HEAP_MARK("radio_init");
 
   fast_rng.begin(radio_driver.getRngSeed());
 
@@ -204,8 +231,10 @@ void setup() {
   the_mesh.begin();
 #elif defined(ESP32)
   SPIFFS.begin(true);
+  HEAP_MARK("SPIFFS");
   store.begin();
   the_mesh.begin();
+  HEAP_MARK("the_mesh.begin");
 #else
   #error "need to define filesystem"
 #endif
@@ -259,6 +288,12 @@ void setup() {
             wifi_needs_reconnect = true;
         } else if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
             WIFI_DEBUG_PRINTLN("WiFi connected successfully!");
+#if WIFI_DEBUG_LOGGING && ARDUINO
+            WIFI_DEBUG_PRINTLN("ip=%s gw=%s mask=%s ssid=%s bssid=%s ch=%d rssi=%d mac=%s",
+              WiFi.localIP().toString().c_str(), WiFi.gatewayIP().toString().c_str(),
+              WiFi.subnetMask().toString().c_str(), WiFi.SSID().c_str(), WiFi.BSSIDstr().c_str(),
+              (int)WiFi.channel(), (int)WiFi.RSSI(), WiFi.macAddress().c_str());
+#endif
             wifi_needs_reconnect = false;
         }
     });
@@ -280,8 +315,10 @@ void setup() {
     // (the router cannot even resolve its address) while Bluetooth is active, so keep the WiFi side awake.
     WiFi.setSleep(false);
 #endif
+    HEAP_MARK("before wifi iface");
     wifi_interface.begin(TCP_PORT);
     interface_manager.addInterface(InterfaceType::WiFi, &wifi_interface);
+    HEAP_MARK("wifi iface");
   } else {
     WIFI_DEBUG_PRINTLN("wifi disabled");
   }
@@ -299,12 +336,14 @@ void setup() {
     }
     interface_manager.addInterface(InterfaceType::Web, &web_interface);
   }
+  HEAP_MARK("web iface");
 #endif
 #endif
 
 #if defined(BLE_PIN_CODE) && defined(BLE_START_LAST)
   bluetooth_interface.begin(BLE_NAME_PREFIX, the_mesh.getNodePrefs()->node_name, the_mesh.getBLEPin());
   interface_manager.addInterface(InterfaceType::Bluetooth, &bluetooth_interface);
+  HEAP_MARK("ble begin");
 #endif
 
 // add usb interface
@@ -328,6 +367,7 @@ void setup() {
 #endif
 
   the_mesh.startInterface(interface_manager);
+  HEAP_MARK("startInterface");
   sensors.begin();
 
 #if ENV_INCLUDE_GPS == 1
@@ -336,6 +376,7 @@ void setup() {
 
 #ifdef DISPLAY_CLASS
   ui_task.begin(disp, &sensors, the_mesh.getNodePrefs());  // still want to pass this in as dependency, as prefs might be moved
+  HEAP_MARK("ui_task.begin");
   the_mesh.setListener(&ui_task);
 #endif
 
@@ -343,6 +384,22 @@ void setup() {
 }
 
 void loop() {
+#if WIFI_DEBUG_LOGGING && ARDUINO && defined(ESP32)
+  static unsigned long last_wifi_status = 0;
+  if (millis() - last_wifi_status >= 1000) {
+    last_wifi_status = millis();
+    static unsigned prev_internal = 0;
+    unsigned internal = (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    WIFI_DEBUG_PRINTLN("status=%d ip=%s rssi=%d internal=%u min=%u largest=%u psram=%u up=%lus",
+      (int)WiFi.status(), WiFi.localIP().toString().c_str(), (int)WiFi.RSSI(), internal,
+      (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+      (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), millis() / 1000);
+    if (prev_internal && (internal + 2048 < prev_internal || prev_internal + 2048 < internal))
+      WIFI_DEBUG_PRINTLN("HEAP: internal %u -> %u (%+d)", prev_internal, internal, (int)internal - (int)prev_internal);
+    prev_internal = internal;
+  }
+#endif
   the_mesh.loop();
   interface_manager.loop();
   sensors.loop();
