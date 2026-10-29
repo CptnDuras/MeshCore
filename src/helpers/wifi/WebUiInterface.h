@@ -35,6 +35,9 @@ class AsyncAuthenticationMiddleware;
 #ifndef WEBUI_USER
   #define WEBUI_USER "admin"
 #endif
+#ifndef WEBUI_WS_MAX_QUEUED
+  #define WEBUI_WS_MAX_QUEUED 3   // frames handed to the WebSocket library per client before the earlier ones are acknowledged
+#endif
 
 // Called on the Arduino loop task with the values entered in the setup form (already validated).
 typedef void (*WebUiSetupSaveFn)(const char* ssid, const char* wifiPwd, const char* webPwd);
@@ -68,6 +71,7 @@ class WebUiInterface : public BaseSerialInterface {
   int _recv_len = 0;
   Frame _send[SEND_QUEUE_SIZE];
   int _send_len = 0;
+  bool canQueueFrame();
 
   // access point and first-boot setup form
   bool _apOn = false;

@@ -6,6 +6,14 @@
 #include <ESPAsyncWebServer.h>
 #include <string.h>
 
+#if defined(WIFI_DEBUG_LOGGING) && WIFI_DEBUG_LOGGING
+  #include <esp_heap_caps.h>
+  #define WS_DEBUG(F, ...) Serial.printf("WS: " F " (internal=%u min=%u)\n", ##__VA_ARGS__, \
+    (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL))
+#else
+  #define WS_DEBUG(...) {}
+#endif
+
 // Host part of an Origin header ("http://node.local:8080") compared to the Host header
 // ("node.local:8080"). A page served by this node always sends matching values.
 bool WebUiInterface::sameOrigin(const char* origin, const char* host) {
@@ -128,6 +136,7 @@ void WebUiInterface::begin(uint16_t port, const char* user, const char* password
 void WebUiInterface::onEvent(AsyncWebSocketClient* client, int type, void* arg, uint8_t* data, size_t len) {
   switch ((AwsEventType)type) {
     case WS_EVT_CONNECT:
+      WS_DEBUG("connect id=%u clients=%u", (unsigned)client->id(), (unsigned)_ws->count());
       if (_ws->count() > WEBUI_MAX_CLIENTS) {
         // Make room by dropping the page that has been connected longest, never the new one. It is told (4001) not to
         // reconnect by itself: pages that reconnect on their own would keep replacing each other for as long as three are open.
@@ -139,6 +148,7 @@ void WebUiInterface::onEvent(AsyncWebSocketClient* client, int type, void* arg, 
       break;
     case WS_EVT_DISCONNECT:
     case WS_EVT_ERROR:
+      WS_DEBUG("%s id=%u", (AwsEventType)type == WS_EVT_ERROR ? "error" : "disconnect", (unsigned)client->id());
       _clients = _ws->count();
       break;
     case WS_EVT_DATA: {
@@ -146,6 +156,7 @@ void WebUiInterface::onEvent(AsyncWebSocketClient* client, int type, void* arg, 
       // one companion frame is one unfragmented binary message
       if (!info->final || info->index != 0 || info->len != len || info->opcode != WS_BINARY) break;
       if (len == 0 || len > MAX_FRAME_SIZE) break;
+      WS_DEBUG("rx %u bytes cmd=%u queued=%d", (unsigned)len, data[0], _recv_len);
       xSemaphoreTake(_mux, portMAX_DELAY);
       if (_recv_len < RECV_QUEUE_SIZE) {
         _recv[_recv_len].len = len;
@@ -178,6 +189,17 @@ size_t WebUiInterface::writeFrame(const uint8_t src[], size_t len) {
   return len;
 }
 
+// The library writes a frame's header and its payload to the TCP buffer separately. When the payload write is refused after the
+// header went in, the browser sees a stray header and drops the page (invalid frame header, reserved bits, masked frame, 1006).
+// lwIP refuses once about 16 segments are queued, and a burst of small frames (the contact list) gets there, so only a few frames
+// are handed to the library at a time. The rest wait in _send until the earlier ones are acknowledged.
+bool WebUiInterface::canQueueFrame() {
+  for (auto& c : _ws->getClients()) {
+    if (c.status() == WS_CONNECTED && c.queueLen() >= WEBUI_WS_MAX_QUEUED) return false;
+  }
+  return true;
+}
+
 void WebUiInterface::loop() {
   if (_savePending && _onSave) {   // form values arrive on the async task; saving prefs happens here
     xSemaphoreTake(_mux, portMAX_DELAY);
@@ -205,7 +227,13 @@ void WebUiInterface::loop() {
     return;
   }
   // push queued frames while every client can take one; a slow client holds the queue
-  while (_send_len > 0 && _ws->availableForWriteAll()) {
+  static unsigned long last_stall = 0;
+  if (_send_len > 0 && !canQueueFrame() && millis() - last_stall > 1000) {
+    last_stall = millis();
+    WS_DEBUG("send stalled: %d queued, a client cannot take a frame", _send_len);
+  }
+  while (_send_len > 0 && canQueueFrame()) {
+    WS_DEBUG("tx %u bytes code=%u queued=%d", (unsigned)_send[0].len, _send[0].buf[0], _send_len);
     _ws->binaryAll(_send[0].buf, _send[0].len);
     _send_len--;
     for (int i = 0; i < _send_len; i++) _send[i] = _send[i + 1];
