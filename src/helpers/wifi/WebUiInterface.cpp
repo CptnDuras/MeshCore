@@ -5,6 +5,7 @@
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
 #include <string.h>
+#include <new>
 
 #if defined(WIFI_DIAG_LOGGING) && WIFI_DIAG_LOGGING
   #include <esp_heap_caps.h>
@@ -105,6 +106,10 @@ void WebUiInterface::startAccessPoint(bool keepStation, bool permanent, const ch
 void WebUiInterface::begin(uint16_t port, const char* user, const char* password) {
   if (!password || !password[0]) return;   // no password, no web UI
 
+  _recv = new (std::nothrow) Frame[RECV_QUEUE_SIZE];
+  _send = new (std::nothrow) Frame[SEND_QUEUE_SIZE];
+  if (!_recv || !_send) return;   // no memory for the queues: leave the UI off rather than fail later
+
   ensureNetworkStack();
   _mux = xSemaphoreCreateMutex();
   _server = new AsyncWebServer(port);
@@ -159,8 +164,9 @@ void WebUiInterface::onEvent(AsyncWebSocketClient* client, int type, void* arg, 
       WS_DEBUG("rx %u bytes cmd=%u queued=%d", (unsigned)len, data[0], _recv_len);
       xSemaphoreTake(_mux, portMAX_DELAY);
       if (_recv_len < RECV_QUEUE_SIZE) {
-        _recv[_recv_len].len = len;
-        memcpy(_recv[_recv_len].buf, data, len);
+        Frame& f = _recv[(_recv_head + _recv_len) & (RECV_QUEUE_SIZE - 1)];
+        f.len = len;
+        memcpy(f.buf, data, len);
         _recv_len++;
       }   // else dropped: the page waits for each reply before sending the next command
       xSemaphoreGive(_mux);
@@ -174,6 +180,7 @@ void WebUiInterface::onEvent(AsyncWebSocketClient* client, int type, void* arg, 
 void WebUiInterface::enable() {
   _isEnabled = true;
   _send_len = 0;
+  _send_head = 0;
 }
 
 void WebUiInterface::disable() {
@@ -181,10 +188,11 @@ void WebUiInterface::disable() {
 }
 
 size_t WebUiInterface::writeFrame(const uint8_t src[], size_t len) {
-  if (!_isEnabled || _clients == 0 || len == 0 || len > MAX_FRAME_SIZE) return 0;
+  if (!_isEnabled || !_send || _clients == 0 || len == 0 || len > MAX_FRAME_SIZE) return 0;
   if (_send_len >= SEND_QUEUE_SIZE) return 0;
-  _send[_send_len].len = len;
-  memcpy(_send[_send_len].buf, src, len);
+  Frame& f = _send[(_send_head + _send_len) & (SEND_QUEUE_SIZE - 1)];
+  f.len = len;
+  memcpy(f.buf, src, len);
   _send_len++;
   return len;
 }
@@ -224,6 +232,7 @@ void WebUiInterface::loop() {
   _clients = _ws->count();
   if (_clients == 0) {
     _send_len = 0;   // nobody to tell
+    _send_head = 0;
     return;
   }
   // push queued frames while every client can take one; a slow client holds the queue
@@ -233,10 +242,11 @@ void WebUiInterface::loop() {
     WS_DEBUG("send stalled: %d queued, a client cannot take a frame", _send_len);
   }
   while (_send_len > 0 && canQueueFrame()) {
-    WS_DEBUG("tx %u bytes code=%u queued=%d", (unsigned)_send[0].len, _send[0].buf[0], _send_len);
-    _ws->binaryAll(_send[0].buf, _send[0].len);
+    Frame& f = _send[_send_head];
+    WS_DEBUG("tx %u bytes code=%u queued=%d", (unsigned)f.len, f.buf[0], _send_len);
+    _ws->binaryAll(f.buf, f.len);
+    _send_head = (_send_head + 1) & (SEND_QUEUE_SIZE - 1);
     _send_len--;
-    for (int i = 0; i < _send_len; i++) _send[i] = _send[i + 1];
   }
 }
 
@@ -245,10 +255,10 @@ size_t WebUiInterface::checkRecvFrame(uint8_t dest[]) {
   size_t n = 0;
   xSemaphoreTake(_mux, portMAX_DELAY);
   if (_recv_len > 0) {
-    n = _recv[0].len;
-    memcpy(dest, _recv[0].buf, n);
+    n = _recv[_recv_head].len;
+    memcpy(dest, _recv[_recv_head].buf, n);
+    _recv_head = (_recv_head + 1) & (RECV_QUEUE_SIZE - 1);
     _recv_len--;
-    for (int i = 0; i < _recv_len; i++) _recv[i] = _recv[i + 1];
   }
   xSemaphoreGive(_mux);
   return n;

@@ -67,10 +67,12 @@ class WebUiInterface : public BaseSerialInterface {
   bool _isEnabled = false;
   volatile int _clients = 0;
 
-  Frame _recv[RECV_QUEUE_SIZE];
-  int _recv_len = 0;
-  Frame _send[SEND_QUEUE_SIZE];
-  int _send_len = 0;
+  // Rings of frames, allocated by begin(): a node with the web UI off (no password) holds none of this, and with PSRAM malloc on
+  // (EXTMEM_MALLOC_LIMIT) they live outside the scarce internal heap. Sizes are powers of two so an index wraps with a mask.
+  Frame* _recv = nullptr;
+  int _recv_head = 0, _recv_len = 0;
+  Frame* _send = nullptr;
+  int _send_head = 0, _send_len = 0;
   bool canQueueFrame();
 
   // access point and first-boot setup form
