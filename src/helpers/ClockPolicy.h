@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 // When the node's clock may be set or moved. Pure rules, so they can be tested off the board.
@@ -10,6 +11,12 @@
 // (a wrongly set RTC), or when the sender says to set exactly this (`force`).
 inline bool clockSetAllowed(uint32_t secs, uint32_t current, bool force) {
   return force || secs >= current || current - secs > CLOCK_MAX_AHEAD_SECS;
+}
+
+// The set-time frame is the command byte, 4 bytes of seconds, and optionally a sixth byte: 1 means set exactly this time.
+// Apps that send five bytes are never forced.
+inline bool clockSetForced(const uint8_t* frame, size_t len) {
+  return len >= 6 && frame[5] == 1;
 }
 
 // After a reset the newest contact stamp is a good floor for the clock. Contacts are stamped with the clock as it was when

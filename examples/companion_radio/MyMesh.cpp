@@ -1342,8 +1342,7 @@ void MyMesh::handleCmdFrame(size_t len) {
     memcpy(&secs, &cmd_frame[1], 4);
     uint32_t curr = getRTCClock()->getCurrentTime();
     // a sixth byte of 1 sets exactly this time (the web page's "set the node clock" button); see ClockPolicy.h
-    bool force = len >= 6 && cmd_frame[5] == 1;
-    if (clockSetAllowed(secs, curr, force)) {
+    if (clockSetAllowed(secs, curr, clockSetForced(cmd_frame, len))) {
       getRTCClock()->setCurrentTime(secs);
       writeOKFrame();
     } else {
