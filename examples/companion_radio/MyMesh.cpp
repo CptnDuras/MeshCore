@@ -5,6 +5,7 @@
 #include <WiFi.h>
 #endif
 #include <Mesh.h>
+#include <helpers/ClockPolicy.h>
 
 #define CMD_APP_START                 1
 #define CMD_SEND_TXT_MSG              2
@@ -1290,7 +1291,9 @@ void MyMesh::handleCmdFrame(size_t len) {
     uint32_t secs;
     memcpy(&secs, &cmd_frame[1], 4);
     uint32_t curr = getRTCClock()->getCurrentTime();
-    if (secs >= curr) {
+    // a sixth byte of 1 sets exactly this time; see ClockPolicy.h
+    bool force = len >= 6 && cmd_frame[5] == 1;
+    if (clockSetAllowed(secs, curr, force)) {
       getRTCClock()->setCurrentTime(secs);
       writeOKFrame();
     } else {
