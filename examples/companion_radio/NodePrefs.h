@@ -48,7 +48,7 @@ public:
   uint8_t agc_reset_interval = 0;  // secs / 4
   char default_scope_name[31];
   uint8_t default_scope_key[16];
-  int8_t tz_offset = 0;
+  float tz_offset = 0;
 #ifdef ENABLE_WIFI_INTERFACE
   #ifndef WIFI_SSID
     #define WIFI_SSID ""
@@ -61,6 +61,34 @@ public:
   char ap_pwd[33] = {0};    // key of that access point (8 to 32 characters); empty = the built-in default
   // use ssid from prefs, or fallback to ssid from build flags
   const char* getWifiSSID() const { return wifi_ssid[0] ? wifi_ssid : WIFI_SSID; }
+#endif
+#ifdef DISPLAY_CLASS
+  #ifndef UI_SHOW_CLOCK
+    #define UI_SHOW_CLOCK 0
+  #endif
+  #ifndef AUTO_OFF_MILLIS
+    #define AUTO_OFF_MILLIS 15000
+  #endif
+  #ifndef EINK_MAX_PARTIAL_REFRESH
+    #define EINK_MAX_PARTIAL_REFRESH 0
+  #endif
+  uint8_t ui_show_clock = UI_SHOW_CLOCK;
+  uint32_t ui_auto_off_delay = AUTO_OFF_MILLIS / 1000;
+  int32_t ui_backlight_delay = 5;
+  #if defined(BACKLIGHT_BTN)
+  uint8_t ui_backlight_on_keys = 0;
+  #else
+  uint8_t ui_backlight_on_keys = 1;
+  #endif
+  uint8_t ui_backlight_on_msgs = 0;
+#ifdef UI_SCREENOFF_BLANK
+  uint8_t ui_auto_off_blank = 1;
+#else
+  uint8_t ui_auto_off_blank = 0;
+#endif
+  uint8_t ui_auto_off_keep_msgs = 1;
+  uint8_t ui_max_partial = EINK_MAX_PARTIAL_REFRESH;
+  uint8_t ui_nd_name = 1;
 #endif
 
 private:
@@ -106,8 +134,8 @@ private:
     void setIntThresh(uint8_t t) override { _parent->interference_threshold = t; markDirty(); }
     uint8_t getRxGain() const override { return _parent->rx_boosted_gain; }
     void setRxGain(uint8_t g) override { _parent->rx_boosted_gain = g; markDirty(); }
-    uint8_t getTxPower() const override { return _parent->tx_power_dbm; }
-    void setTxPower(uint8_t dbm) override { _parent->tx_power_dbm = dbm; markDirty(); }
+    int8_t getTxPower() const override { return _parent->tx_power_dbm; }
+    void setTxPower(int8_t dbm) override { _parent->tx_power_dbm = dbm; markDirty(); }
     float getRxDelay() const override { return _parent->rx_delay_base; }
     void setRxDelay(float d) override { _parent->rx_delay_base = d; markDirty(); }
     uint16_t getAgcResetInt() const override { return _parent->agc_reset_interval * 4; }
@@ -197,6 +225,27 @@ private:
   WiFiPrefs wifi;
 #endif
 
+#ifdef DISPLAY_CLASS
+  class UI_Prefs : public ConfigSerializer {
+    NodePrefs* _parent;
+  protected:
+    void structure() override {
+  	def("show_clock", _parent->ui_show_clock);
+  	def("auto_off", _parent->ui_auto_off_delay);
+  	def("bl_dly", _parent->ui_backlight_delay);
+  	def("bl_keys", _parent->ui_backlight_on_keys);
+  	def("bl_msgs", _parent->ui_backlight_on_msgs);
+    def("max_partial", _parent->ui_max_partial);
+  	def("off_blank", _parent->ui_auto_off_blank);
+  	def("off_keep_msgs", _parent->ui_auto_off_keep_msgs);
+    def("nd_name", _parent->ui_nd_name);
+    }
+  public:
+    UI_Prefs(NodePrefs* parent) : _parent(parent) {}
+  };
+  UI_Prefs ui;
+#endif
+
 protected:
   void structure() override {
     def("name", node_name, sizeof(node_name));
@@ -212,11 +261,17 @@ protected:
 #ifdef ENABLE_WIFI_INTERFACE
     def("wifi", wifi);
 #endif
+#ifdef DISPLAY_CLASS
+    def("ui", ui);
+#endif
   }
 public:
   NodePrefs() : radio(this), gps(this), companion(this), custom(&radio)
 #ifdef ENABLE_WIFI_INTERFACE
     , wifi(this)
+#endif
+#ifdef DISPLAY_CLASS
+    , ui(this)
 #endif
   {
     node_name[0] = 0;
