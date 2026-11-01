@@ -8,6 +8,7 @@
 #endif
 #endif
 #include <Mesh.h>
+#include <helpers/ClockPolicy.h>
 
 #define CMD_APP_START                 1
 #define CMD_SEND_TXT_MSG              2
@@ -1338,10 +1339,9 @@ void MyMesh::handleCmdFrame(size_t len) {
     uint32_t secs;
     memcpy(&secs, &cmd_frame[1], 4);
     uint32_t curr = getRTCClock()->getCurrentTime();
-    // never backwards, except to correct a clock that is more than a year ahead (a wrongly set RTC, e.g. year 2072),
-    // or when the sender says to set exactly this (a sixth byte of 1: the web page's "set the node clock" button)
+    // a sixth byte of 1 sets exactly this time (the web page's "set the node clock" button); see ClockPolicy.h
     bool force = len >= 6 && cmd_frame[5] == 1;
-    if (force || secs >= curr || curr - secs > 365UL * 24 * 3600) {
+    if (clockSetAllowed(secs, curr, force)) {
       getRTCClock()->setCurrentTime(secs);
       writeOKFrame();
     } else {

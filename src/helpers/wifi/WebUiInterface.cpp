@@ -2,31 +2,24 @@
 
 #include "WebUiInterface.h"
 #include "WebUiPage.h"
+#include "WebUiRules.h"
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
 #include <string.h>
-#include <new>
 
 #if defined(WIFI_DIAG_LOGGING) && WIFI_DIAG_LOGGING
-  #include <esp_heap_caps.h>
-  #define WS_DEBUG(F, ...) Serial.printf("WS: " F " (internal=%u min=%u)\n", ##__VA_ARGS__, \
-    (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL))
+#include <esp_heap_caps.h>
+#define WS_DEBUG(F, ...) Serial.printf("WS: " F " (internal=%u min=%u)\n", ##__VA_ARGS__, \
+                                       (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL))
 #else
-  #define WS_DEBUG(...) {}
+#define WS_DEBUG(...) \
+  {}
 #endif
-
-// Host part of an Origin header ("http://node.local:8080") compared to the Host header
-// ("node.local:8080"). A page served by this node always sends matching values.
-bool WebUiInterface::sameOrigin(const char* origin, const char* host) {
-  const char* p = strstr(origin, "://");
-  p = p ? p + 3 : origin;
-  return strcasecmp(p, host) == 0;
-}
 
 void WebUiInterface::addOriginCheck() {
   _server->addMiddleware([](AsyncWebServerRequest* r, ArMiddlewareNext next) {
     if (r->hasHeader("Origin") && r->hasHeader("Host") &&
-        !sameOrigin(r->header("Origin").c_str(), r->header("Host").c_str())) {
+        !webUiSameOrigin(r->header("Origin").c_str(), r->header("Host").c_str())) {
       r->send(403, "text/plain", "cross-origin request refused");
       return;
     }
@@ -36,26 +29,25 @@ void WebUiInterface::addOriginCheck() {
 
 // WEBUI_AP_MODE (V4 web builds): the node can be its own access point, so the WiFi name may be left empty
 #ifdef WEBUI_AP_MODE
-  #define SETUP_SSID_FIELD "<label>WiFi name</label><input name=ssid maxlength=32 autocomplete=off>" \
-                           "<small>Leave empty to keep this node as its own WiFi (MeshNode-XXXX) and connect to it directly.</small>"
-  #define SETUP_SSID_MIN 0
+#define SETUP_SSID_FIELD "<label>WiFi name</label><input name=ssid maxlength=32 autocomplete=off>" \
+                         "<small>Leave empty to keep this node as its own WiFi (MeshNode-XXXX) and connect to it directly.</small>"
+#define SETUP_SSID_MIN   0
 #else
-  #define SETUP_SSID_FIELD "<label>WiFi name</label><input name=ssid maxlength=32 required autocomplete=off>"
-  #define SETUP_SSID_MIN 1
+#define SETUP_SSID_FIELD "<label>WiFi name</label><input name=ssid maxlength=32 required autocomplete=off>"
+#define SETUP_SSID_MIN   1
 #endif
 
 static const char SETUP_PAGE[] PROGMEM =
-  "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
-  "<title>Node setup</title><style>body{font:16px system-ui,sans-serif;max-width:26em;margin:2em auto;padding:0 1em}"
-  "label{display:block;margin:1em 0 .2em}input{width:100%;padding:.6em;box-sizing:border-box;font:inherit}"
-  "button{margin-top:1.2em;padding:.7em 1.4em;font:inherit}small{color:#666}</style></head><body>"
-  "<h1>Node setup</h1><p>Give the node your WiFi and choose the password for its web page. It reboots and joins your WiFi; "
-  "then open its address from there and sign in as <b>admin</b>.</p>"
-  "<form method=post action=/save>"
-  SETUP_SSID_FIELD
-  "<label>WiFi password</label><input name=wpw maxlength=63 type=password autocomplete=off><small>Leave empty for an open network.</small>"
-  "<label>Web page password</label><input name=webpw minlength=8 maxlength=32 type=password required autocomplete=off>"
-  "<small>8 to 32 characters.</small><br><button>Save and reboot</button></form></body></html>";
+    "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+    "<title>Node setup</title><style>body{font:16px system-ui,sans-serif;max-width:26em;margin:2em auto;padding:0 1em}"
+    "label{display:block;margin:1em 0 .2em}input{width:100%;padding:.6em;box-sizing:border-box;font:inherit}"
+    "button{margin-top:1.2em;padding:.7em 1.4em;font:inherit}small{color:#666}</style></head><body>"
+    "<h1>Node setup</h1><p>Give the node your WiFi and choose the password for its web page. It reboots and joins your WiFi; "
+    "then open its address from there and sign in as <b>admin</b>.</p>"
+    "<form method=post action=/save>" SETUP_SSID_FIELD
+    "<label>WiFi password</label><input name=wpw maxlength=63 type=password autocomplete=off><small>Leave empty for an open network.</small>"
+    "<label>Web page password</label><input name=webpw minlength=8 maxlength=32 type=password required autocomplete=off>"
+    "<small>8 to 32 characters.</small><br><button>Save and reboot</button></form></body></html>";
 
 // AsyncTCP asserts if the server starts before the network stack exists, which is the case until WiFi has a mode
 static void ensureNetworkStack() {
@@ -72,17 +64,17 @@ void WebUiInterface::beginSetup(uint16_t port, WebUiSetupSaveFn onSave) {
   _server->on("/save", HTTP_POST, [this](AsyncWebServerRequest* r) {
     auto val = [r](const char* k) { return r->hasParam(k, true) ? r->getParam(k, true)->value() : String(); };
     String ssid = val("ssid"), wpw = val("wpw"), webpw = val("webpw");
-    if (ssid.length() < SETUP_SSID_MIN || ssid.length() > 32 || wpw.length() > 63 || webpw.length() < 8 || webpw.length() > 32) {
+    if (!webUiSetupValid(ssid.length(), wpw.length(), webpw.length(), SETUP_SSID_MIN)) {
       r->send(400, "text/plain", "Check the lengths: WiFi name 1-32 (may be empty on boards that can be their own WiFi), WiFi password up to 63, web password 8-32.");
       return;
     }
     xSemaphoreTake(_mux, portMAX_DELAY);
-    strcpy(_pSsid, ssid.c_str()); strcpy(_pWifiPwd, wpw.c_str()); strcpy(_pWebPwd, webpw.c_str());
+    strcpy(_pSsid, ssid.c_str());
+    strcpy(_pWifiPwd, wpw.c_str());
+    strcpy(_pWebPwd, webpw.c_str());
     _savePending = true;
     xSemaphoreGive(_mux);
-    r->send(200, "text/html", "<!doctype html><meta name=viewport content='width=device-width'><body style='font:16px system-ui;margin:2em'>"
-                              + String(ssid.length() ? "Saved. The node is rebooting and will join your WiFi."
-                                                     : "Saved. The node is rebooting and will stay as its own WiFi, MeshNode-XXXX. Join it and open http://192.168.4.1/"));
+    r->send(200, "text/html", "<!doctype html><meta name=viewport content='width=device-width'><body style='font:16px system-ui;margin:2em'>" + String(ssid.length() ? "Saved. The node is rebooting and will join your WiFi." : "Saved. The node is rebooting and will stay as its own WiFi, MeshNode-XXXX. Join it and open http://192.168.4.1/"));
   });
   _server->onNotFound([](AsyncWebServerRequest* r) { r->redirect("/"); });
   _server->begin();
@@ -94,9 +86,8 @@ void WebUiInterface::startAccessPoint(bool keepStation, bool permanent, const ch
   WiFi.macAddress(mac);
   char name[20];
   snprintf(name, sizeof(name), "MeshNode-%02X%02X", mac[4], mac[5]);
-  size_t pl = password ? strlen(password) : 0;
   WiFi.mode(keepStation ? WIFI_AP_STA : WIFI_AP);
-  WiFi.softAP(name, pl >= 8 && pl <= 32 ? password : WEBUI_AP_PASSWORD);   // WPA2 needs at least 8 characters
+  WiFi.softAP(name, webUiApPasswordValid(password) ? password : WEBUI_AP_PASSWORD); // WPA2 needs at least 8 characters
   _apOn = true;
   _apKeepsStation = keepStation;
   _apPermanent = permanent;
@@ -104,11 +95,9 @@ void WebUiInterface::startAccessPoint(bool keepStation, bool permanent, const ch
 }
 
 void WebUiInterface::begin(uint16_t port, const char* user, const char* password) {
-  if (!password || !password[0]) return;   // no password, no web UI
+  if (!password || !password[0]) return; // no password, no web UI
 
-  _recv = new (std::nothrow) Frame[RECV_QUEUE_SIZE];
-  _send = new (std::nothrow) Frame[SEND_QUEUE_SIZE];
-  if (!_recv || !_send) return;   // no memory for the queues: leave the UI off rather than fail later
+  if (!_recv.alloc() || !_send.alloc()) return; // no memory for the queues: leave the UI off rather than fail later
 
   ensureNetworkStack();
   _mux = xSemaphoreCreateMutex();
@@ -124,7 +113,7 @@ void WebUiInterface::begin(uint16_t port, const char* user, const char* password
     onEvent(c, (int)t, arg, d, n);
   });
 
-  addOriginCheck();   // outermost: refuse cross-site requests before authenticating
+  addOriginCheck(); // outermost: refuse cross-site requests before authenticating
   _server->addMiddleware(_auth);
 
   _server->addHandler(_ws);
@@ -146,7 +135,10 @@ void WebUiInterface::onEvent(AsyncWebSocketClient* client, int type, void* arg, 
         // Make room by dropping the page that has been connected longest, never the new one. It is told (4001) not to
         // reconnect by itself: pages that reconnect on their own would keep replacing each other for as long as three are open.
         for (auto& c : _ws->getClients()) {
-          if (c.id() != client->id() && c.status() == WS_CONNECTED) { _ws->close(c.id(), 4001, "replaced"); break; }
+          if (c.id() != client->id() && c.status() == WS_CONNECTED) {
+            _ws->close(c.id(), 4001, "replaced");
+            break;
+          }
         }
       }
       _clients = _ws->count();
@@ -161,14 +153,9 @@ void WebUiInterface::onEvent(AsyncWebSocketClient* client, int type, void* arg, 
       // one companion frame is one unfragmented binary message
       if (!info->final || info->index != 0 || info->len != len || info->opcode != WS_BINARY) break;
       if (len == 0 || len > MAX_FRAME_SIZE) break;
-      WS_DEBUG("rx %u bytes cmd=%u queued=%d", (unsigned)len, data[0], _recv_len);
+      WS_DEBUG("rx %u bytes cmd=%u queued=%d", (unsigned)len, data[0], _recv.size());
       xSemaphoreTake(_mux, portMAX_DELAY);
-      if (_recv_len < RECV_QUEUE_SIZE) {
-        Frame& f = _recv[(_recv_head + _recv_len) & (RECV_QUEUE_SIZE - 1)];
-        f.len = len;
-        memcpy(f.buf, data, len);
-        _recv_len++;
-      }   // else dropped: the page waits for each reply before sending the next command
+      _recv.push(data, len); // if full, dropped: the page waits for each reply before sending the next command
       xSemaphoreGive(_mux);
       break;
     }
@@ -179,8 +166,7 @@ void WebUiInterface::onEvent(AsyncWebSocketClient* client, int type, void* arg, 
 
 void WebUiInterface::enable() {
   _isEnabled = true;
-  _send_len = 0;
-  _send_head = 0;
+  _send.clear();
 }
 
 void WebUiInterface::disable() {
@@ -188,13 +174,8 @@ void WebUiInterface::disable() {
 }
 
 size_t WebUiInterface::writeFrame(const uint8_t src[], size_t len) {
-  if (!_isEnabled || !_send || _clients == 0 || len == 0 || len > MAX_FRAME_SIZE) return 0;
-  if (_send_len >= SEND_QUEUE_SIZE) return 0;
-  Frame& f = _send[(_send_head + _send_len) & (SEND_QUEUE_SIZE - 1)];
-  f.len = len;
-  memcpy(f.buf, src, len);
-  _send_len++;
-  return len;
+  if (!_isEnabled || _clients == 0) return 0;
+  return _send.push(src, len) ? len : 0;
 }
 
 // The library writes a frame's header and its payload to the TCP buffer separately. When the payload write is refused after the
@@ -209,10 +190,12 @@ bool WebUiInterface::canQueueFrame() {
 }
 
 void WebUiInterface::loop() {
-  if (_savePending && _onSave) {   // form values arrive on the async task; saving prefs happens here
+  if (_savePending && _onSave) { // form values arrive on the async task; saving prefs happens here
     xSemaphoreTake(_mux, portMAX_DELAY);
     char s[33], w[64], p[33];
-    strcpy(s, _pSsid); strcpy(w, _pWifiPwd); strcpy(p, _pWebPwd);
+    strcpy(s, _pSsid);
+    strcpy(w, _pWifiPwd);
+    strcpy(p, _pWebPwd);
     _savePending = false;
     xSemaphoreGive(_mux);
     _onSave(s, w, p);
@@ -228,38 +211,31 @@ void WebUiInterface::loop() {
     }
   }
   if (!_ws) return;
-  _ws->cleanupClients(0xFFFF);   // only frees clients that have gone; making room for a new page is done when it connects
+  _ws->cleanupClients(0xFFFF); // only frees clients that have gone; making room for a new page is done when it connects
   _clients = _ws->count();
   if (_clients == 0) {
-    _send_len = 0;   // nobody to tell
-    _send_head = 0;
+    _send.clear(); // nobody to tell
     return;
   }
   // push queued frames while every client can take one; a slow client holds the queue
   static unsigned long last_stall = 0;
-  if (_send_len > 0 && !canQueueFrame() && millis() - last_stall > 1000) {
+  if (!_send.empty() && !canQueueFrame() && millis() - last_stall > 1000) {
     last_stall = millis();
-    WS_DEBUG("send stalled: %d queued, a client cannot take a frame", _send_len);
+    WS_DEBUG("send stalled: %d queued, a client cannot take a frame", _send.size());
   }
-  while (_send_len > 0 && canQueueFrame()) {
-    Frame& f = _send[_send_head];
-    WS_DEBUG("tx %u bytes code=%u queued=%d", (unsigned)f.len, f.buf[0], _send_len);
-    _ws->binaryAll(f.buf, f.len);
-    _send_head = (_send_head + 1) & (SEND_QUEUE_SIZE - 1);
-    _send_len--;
+  size_t n;
+  while (!_send.empty() && canQueueFrame()) {
+    const uint8_t* f = _send.front(n);
+    WS_DEBUG("tx %u bytes code=%u queued=%d", (unsigned)n, f[0], _send.size());
+    _ws->binaryAll(f, n);
+    _send.pop();
   }
 }
 
 size_t WebUiInterface::checkRecvFrame(uint8_t dest[]) {
   if (!_mux) return 0;
-  size_t n = 0;
   xSemaphoreTake(_mux, portMAX_DELAY);
-  if (_recv_len > 0) {
-    n = _recv[_recv_head].len;
-    memcpy(dest, _recv[_recv_head].buf, n);
-    _recv_head = (_recv_head + 1) & (RECV_QUEUE_SIZE - 1);
-    _recv_len--;
-  }
+  size_t n = _recv.take(dest);
   xSemaphoreGive(_mux);
   return n;
 }
