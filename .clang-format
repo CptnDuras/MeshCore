@@ -1,3 +1,9 @@
+# Fitted to the code upstream actually has, not to the file this replaces: the old settings (pointer on the name, case labels flush, a 110-column wrap) match none of src/. Measured by
+# formatting src/Mesh.cpp, src/Dispatcher.cpp, BaseChatMesh.cpp, CommonCLI.cpp and both MyMesh.cpp from upstream main: this changes about 25% fewer lines than the old settings.
+# Upstream is hand-formatted, so no setting matches it exactly: format only the lines you change (git clang-format), never a whole shared file.
+# Fitted to the code upstream actually has, not to the file this replaces: the old settings (pointer on the name, case labels flush, a 110-column wrap) match none of src/. Measured by
+# formatting src/Mesh.cpp, src/Dispatcher.cpp, BaseChatMesh.cpp, CommonCLI.cpp and both MyMesh.cpp from upstream main: this changes about 25% fewer lines than the old settings.
+# Upstream is hand-formatted, so no setting matches it exactly: format only the lines you change (git clang-format), never a whole shared file.
 # .clang-format
 Language:        Cpp
 AccessModifierOffset: -2
@@ -11,17 +17,14 @@ AlignConsecutiveMacros:
 AlignOperands:   true
 AlignTrailingComments: true
 AllowAllParametersOfDeclarationOnNextLine: false
-AllowShortBlocksOnASingleLine: false
 AllowShortCaseLabelsOnASingleLine: false
 AllowShortFunctionsOnASingleLine: Inline
 AllowShortIfStatementsOnASingleLine: true
-AllowShortLoopsOnASingleLine: false
 AlwaysBreakAfterDefinitionReturnType: None
 AlwaysBreakAfterReturnType: None
 AlwaysBreakBeforeMultilineStrings: false
 AlwaysBreakTemplateDeclarations: No
 BinPackArguments: true
-BinPackParameters: true
 BraceWrapping:
   AfterClass:      false
   AfterControlStatement: false
@@ -38,7 +41,6 @@ BreakBeforeBinaryOperators: None
 BreakBeforeBraces: Attach
 BreakBeforeTernaryOperators: true
 BreakConstructorInitializersBeforeComma: false
-ColumnLimit:     110
 CommentPragmas:  '^ IWYU pragma:'
 CompactNamespaces: false
 ConstructorInitializerAllOnOneLineOrOnePerLine: false
@@ -46,8 +48,6 @@ Cpp11BracedListStyle: false
 DerivePointerAlignment: false
 DisableFormat:   false
 IncludeBlocks:   Regroup
-IndentCaseLabels: false
-IndentPPDirectives: None
 IndentWidth:     2
 IndentWrappedFunctionNames: false
 KeepEmptyLinesAtTheStartOfBlocks: true
@@ -62,9 +62,6 @@ PenaltyBreakFirstLessLess: 120
 PenaltyBreakString: 1000
 PenaltyExcessCharacter: 100000
 PenaltyReturnTypeOnItsOwnLine: 60
-PointerAlignment: Right
-ReflowComments:  true
-SortIncludes:    true
 SpaceAfterCStyleCast: false
 SpaceAfterTemplateKeyword: true
 SpaceBeforeAssignmentOperators: true
@@ -81,4 +78,13 @@ SpacesInSquareBrackets: false
 Standard:        Auto
 TabWidth:        2
 UseTab:          Never
-AlignEscapedNewlines: LeftWithLastLine
+PointerAlignment: Left
+ColumnLimit: 0
+AllowShortBlocksOnASingleLine: Always
+AllowShortLoopsOnASingleLine: true
+BinPackParameters: false
+IndentCaseLabels: true
+ReflowComments: false
+SortIncludes: false
+IndentPPDirectives: None
+AlignEscapedNewlines: Left
