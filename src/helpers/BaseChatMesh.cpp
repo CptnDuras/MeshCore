@@ -1,5 +1,6 @@
 #include <helpers/BaseChatMesh.h>
 #include <Utils.h>
+#include <helpers/ClockPolicy.h>
 
 #ifndef SERVER_RESPONSE_DELAY
   #define SERVER_RESPONSE_DELAY   300
@@ -58,14 +59,14 @@ void BaseChatMesh::sendAckTo(const ContactInfo& dest, const uint8_t* ack_hash, u
 }
 
 void BaseChatMesh::bootstrapRTCfromContacts() {
-  uint32_t latest = 0;
+  // A reset loses the time, and the newest contact stamp is a good floor for it (rules in ClockPolicy.h)
+  BootClockFloor floor(getRTCClock()->getCurrentTime());
   for (int i = 0; i < num_contacts; i++) {
-    if (contacts[i].lastmod > latest) {
-      latest = contacts[i].lastmod;
-    }
+    floor.add(contacts[i].lastmod);
   }
-  if (latest != 0) {
-    getRTCClock()->setCurrentTime(latest + 1);
+  uint32_t t;
+  if (floor.newTime(t)) {
+    getRTCClock()->setCurrentTime(t);
   }
 }
 
