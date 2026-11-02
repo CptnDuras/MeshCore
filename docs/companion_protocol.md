@@ -492,6 +492,17 @@ To let other people's pings list this client, send `CMD_SET_OTHER_PARAMS` (38) w
 
 Answering is rate limited to 4 pings per 2 minutes per node, so repeating a ping quickly will find fewer nodes the second time.
 
+## Ack wait and retries
+
+The firmware reports an estimated ack wait (`est_timeout`, milliseconds) in `RESP_CODE_SENT`; the app decides how long to wait and
+how many times to send again (the `attempt` byte of `CMD_SEND_TXT_MSG`), so the number of attempts is an app policy and the firmware
+has no setting for it. In simulation 6 attempts beat 4, and the best retry rhythm was to resend when the reported wait runs out.
+
+To make that wait follow the link, send `CMD_SET_OTHER_PARAMS` (38) with a seventh byte: `1` = size the reported wait from the
+round trips of earlier acks from that contact, by route type (about twice the smoothed round trip plus 1 s, at least 2 s, never more than
+the fixed estimate), `0` = always the fixed estimate (the default). It is saved on the device. Until an ack from that contact has been
+seen, the fixed estimate is used. The extra byte is optional: apps that do not send it leave the setting as it was.
+
 ## Channel Management
 
 ### Channel Types

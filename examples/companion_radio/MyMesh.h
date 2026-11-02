@@ -290,10 +290,24 @@ private:
     unsigned long msg_sent;
     uint32_t ack;
     ContactInfo* contact;
+    bool flood;   // sent by flood (else along a stored path)
   };
   #define EXPECTED_ACK_TABLE_SIZE 8
   AckTableEntry expected_ack_table[EXPECTED_ACK_TABLE_SIZE]; // circular table
   int next_ack_idx;
+
+  // Smoothed round trip of recent acks per contact and route type, so the ack wait reported to the app can follow what this link
+  // really takes (the rtt_wait setting). Kept in RAM only.
+  struct RttEntry {
+    uint8_t key[4];   // start of the contact's public key
+    bool flood;
+    uint32_t srtt_ms;   // 0 = unused
+  };
+  #define RTT_TABLE_SIZE 16
+  RttEntry rtt_table[RTT_TABLE_SIZE]; // circular table
+  int next_rtt_idx;
+  void rttLearn(const ContactInfo& c, bool flood, uint32_t sample_ms);
+  uint32_t rttSizedTimeout(const ContactInfo& c, bool flood, uint32_t fw_timeout_ms) const;
 
   #define ADVERT_PATH_TABLE_SIZE   16
   AdvertPath advert_paths[ADVERT_PATH_TABLE_SIZE]; // circular table

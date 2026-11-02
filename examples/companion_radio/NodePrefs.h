@@ -42,6 +42,7 @@ public:
   uint8_t _client_repeat = 0;  // DEPRECATED -> use repeat.disable_fwd
   uint8_t path_hash_mode = 0;    // which path mode to use when sending
   uint8_t ping_visible = 0;      // 1 = answer mesh pings (so other people can see this client); off by default
+  uint8_t rtt_wait = 0;          // 1 = size the ack wait reported to the app from the round trips seen to that contact (0 = the fixed estimate, as stock)
   uint8_t autoadd_max_hops = 0;  // 0 = no limit, 1 = direct (0 hops), N = up to N-1 hops (max 64)
   uint8_t cad_enabled = 0;
   uint8_t interference_threshold = 0;
@@ -187,6 +188,7 @@ private:
   protected:
     void structure() override {
       def("ping_vis", _parent->ping_visible);
+      def("rtt_wait", _parent->rtt_wait);
       def("auto_max", _parent->autoadd_max_hops);  // 0 = no limit, 1 = direct (0 hops), N = up to N-1 hops (max 64)
       def("defs_nm", _parent->default_scope_name, sizeof(_parent->default_scope_name));
       def("defs_key", (void *) _parent->default_scope_key, sizeof(_parent->default_scope_key));

@@ -421,6 +421,35 @@ void MyMesh::onContactPathUpdated(const ContactInfo &contact) {
   dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
 }
 
+void MyMesh::rttLearn(const ContactInfo& c, bool flood, uint32_t sample_ms) {
+  for (int i = 0; i < RTT_TABLE_SIZE; i++) {
+    RttEntry& e = rtt_table[i];
+    if (e.srtt_ms && e.flood == flood && memcmp(e.key, c.id.pub_key, sizeof(e.key)) == 0) {
+      e.srtt_ms = (e.srtt_ms * 7 + sample_ms) / 8;   // the usual 1/8 smoothing
+      return;
+    }
+  }
+  RttEntry& e = rtt_table[next_rtt_idx];
+  next_rtt_idx = (next_rtt_idx + 1) % RTT_TABLE_SIZE;
+  memcpy(e.key, c.id.pub_key, sizeof(e.key));
+  e.flood = flood;
+  e.srtt_ms = sample_ms ? sample_ms : 1;
+}
+
+// With a round trip seen to this contact by this route type, wait a little over twice that, but never longer than the fixed
+// estimate would, and not under 2 s (acks are sent after a short delay, and the radio is shared).
+uint32_t MyMesh::rttSizedTimeout(const ContactInfo& c, bool flood, uint32_t fw_timeout_ms) const {
+  for (int i = 0; i < RTT_TABLE_SIZE; i++) {
+    const RttEntry& e = rtt_table[i];
+    if (e.srtt_ms && e.flood == flood && memcmp(e.key, c.id.pub_key, sizeof(e.key)) == 0) {
+      uint32_t t = 2 * e.srtt_ms + 1000;
+      if (t < 2000) t = 2000;
+      return t < fw_timeout_ms ? t : fw_timeout_ms;
+    }
+  }
+  return fw_timeout_ms;
+}
+
 ContactInfo*  MyMesh::processAck(const uint8_t *data) {
   if (_listener) {
     uint32_t ack_crc;
@@ -435,6 +464,10 @@ ContactInfo*  MyMesh::processAck(const uint8_t *data) {
       uint32_t trip_time = _ms->getMillis() - expected_ack_table[i].msg_sent;
       memcpy(&out_frame[5], &trip_time, 4);
       _serial->writeFrame(out_frame, 9);
+
+      if (_prefs.rtt_wait && expected_ack_table[i].contact) {
+        rttLearn(*expected_ack_table[i].contact, expected_ack_table[i].flood, trip_time);
+      }
 
       // NOTE: the same ACK can be received multiple times!
       expected_ack_table[i].ack = 0; // clear expected hash, now that we have received ACK
@@ -934,6 +967,8 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   app_target_ver = 0;
   clearPendingReqs();
   next_ack_idx = 0;
+  memset(rtt_table, 0, sizeof(rtt_table));
+  next_rtt_idx = 0;
   sign_data = NULL;
   dirty_contacts_expiry = 0;
   memset(advert_paths, 0, sizeof(advert_paths));
@@ -1200,9 +1235,11 @@ void MyMesh::handleCmdFrame(size_t len) {
         writeErrFrame(ERR_CODE_TABLE_FULL);
       } else {
         if (expected_ack) {
+          if (_prefs.rtt_wait) est_timeout = rttSizedTimeout(*recipient, result == MSG_SEND_SENT_FLOOD, est_timeout);
           expected_ack_table[next_ack_idx].msg_sent = _ms->getMillis(); // add to circular table
           expected_ack_table[next_ack_idx].ack = expected_ack;
           expected_ack_table[next_ack_idx].contact = recipient;
+          expected_ack_table[next_ack_idx].flood = (result == MSG_SEND_SENT_FLOOD);
           next_ack_idx = (next_ack_idx + 1) % EXPECTED_ACK_TABLE_SIZE;
         }
 
@@ -1552,6 +1589,9 @@ void MyMesh::handleCmdFrame(size_t len) {
           _prefs.multi_acks = cmd_frame[4];
           if (len >= 6) {
             _prefs.ping_visible = cmd_frame[5] ? 1 : 0;   // show up when the mesh is pinged
+            if (len >= 7) {
+              _prefs.rtt_wait = cmd_frame[6] ? 1 : 0;   // size the ack wait from the round trips seen
+            }
           }
         }
       }
