@@ -503,8 +503,8 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
           delay_millis = TXT_ACK_DELAY + REPLY_DELAY_MILLIS;
         } else {
           uint32_t d = TXT_ACK_DELAY;
-          if (getExtraAckTransmitCount() > 0) {
-            mesh::Packet *a1 = createMultiAck(ack_hash, 1);
+          for (uint8_t extra = getExtraAckTransmitCount(); extra > 0; extra--) {   // numbered copies, counting down to the plain ack
+            mesh::Packet *a1 = createMultiAck(ack_hash, extra);
             if (a1) sendDirect(a1, client->out_path, client->out_path_len, d);
             d += 300;
           }

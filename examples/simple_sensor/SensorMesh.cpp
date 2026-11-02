@@ -590,8 +590,8 @@ void SensorMesh::sendAckTo(const ClientInfo& dest, uint32_t ack_hash, uint8_t pa
     if (ack) sendFloodScoped(default_scope, ack, TXT_ACK_DELAY, path_hash_size);
   } else {
     uint32_t d = TXT_ACK_DELAY;
-    if (getExtraAckTransmitCount() > 0) {
-      mesh::Packet* a1 = createMultiAck(ack_hash, 1);
+    for (uint8_t extra = getExtraAckTransmitCount(); extra > 0; extra--) {   // numbered copies, counting down to the plain ack
+      mesh::Packet* a1 = createMultiAck(ack_hash, extra);
       if (a1) sendDirect(a1, dest.out_path, dest.out_path_len, d);
       d += 300;
     }

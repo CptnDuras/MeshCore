@@ -19,6 +19,8 @@
 #define ADVERT_LOC_SHARE      1
 #define ADVERT_LOC_PREFS      2
 
+#define MAX_MULTI_ACKS        3    // numbered copies of an ack ahead of the plain one (0 = stock, 1 = what older firmware allowed)
+
 #define LOOP_DETECT_OFF       0
 #define LOOP_DETECT_MINIMAL   1
 #define LOOP_DETECT_MODERATE  2

@@ -292,7 +292,7 @@ uint32_t MyMesh::getDirectRetransmitDelay(const mesh::Packet *packet) {
 }
 
 uint8_t MyMesh::getExtraAckTransmitCount() const {
-  return _prefs.multi_acks;
+  return _prefs.multi_acks > 3 ? 3 : _prefs.multi_acks;   // the app sets this byte as is; more than 3 copies would only cost airtime
 }
 
 void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {

@@ -77,6 +77,7 @@ void CommonCLI::loadPrefs(FILESYSTEM* fs) {
 #endif
     if (file) {
       _prefs->loadSerial(file);   // new Serial prefs
+      _prefs->multi_acks = constrain(_prefs->multi_acks, 0, MAX_MULTI_ACKS);
       _prefs->hop_retries = constrain(_prefs->hop_retries, 0, 3);
       _prefs->hop_fallback = constrain(_prefs->hop_fallback, 0, 1);
       _prefs->hop_rescue = constrain(_prefs->hop_rescue, 0, 1);
@@ -337,7 +338,7 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {  // Legacy 
     _prefs->sf = constrain(_prefs->sf, 5, 12);
     _prefs->cr = constrain(_prefs->cr, 5, 8);
     _prefs->tx_power_dbm = constrain(_prefs->tx_power_dbm, -9, 30);
-    _prefs->multi_acks = constrain(_prefs->multi_acks, 0, 1);
+    _prefs->multi_acks = constrain(_prefs->multi_acks, 0, MAX_MULTI_ACKS);
     _prefs->adc_multiplier = constrain(_prefs->adc_multiplier, 0.0f, 10.0f);
     _prefs->path_hash_mode = constrain(_prefs->path_hash_mode, 0, 2);   // NOTE: mode 3 reserved for future
     _prefs->loop_detect = constrain(_prefs->loop_detect, 0, 3);          // LOOP_DETECT_OFF..LOOP_DETECT_STRICT
