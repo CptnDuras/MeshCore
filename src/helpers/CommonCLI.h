@@ -82,6 +82,7 @@ public:
   uint8_t hop_rescue = 1;       // also take over a unicast packet this repeater only overheard, when its next hop never passes it on (0 = off)
   uint8_t route_cache_en = 1;   // remember the paths adverts took (the `routes` command)
   uint8_t ping_en = 1;          // answer zero-hop pings from clients
+  uint8_t flood_cancel = 0;     // drop a queued relay of a flood after hearing this many other copies of it (0 = off, as stock, 0-8)
   mesh::RouteConfigValues route_cfg;   // route tables and adverts (off by default)
 
   // NOTE: observer settings (MQTT/WiFi/timezone/SNMP/alert) are not in NodePrefs.
@@ -227,6 +228,7 @@ private:
       def("hopresc", _parent->hop_rescue);
       def("rcache", _parent->route_cache_en);
       def("ping", _parent->ping_en);
+      def("fcancel", _parent->flood_cancel);
     }
   public:
     FeaturePrefs(NodePrefs* parent) : _parent(parent) { }

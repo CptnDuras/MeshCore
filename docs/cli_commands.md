@@ -151,6 +151,11 @@ Saved with the other settings; they take effect at once.
   whose cached path starts at a repeater that has died is still heard by the repeaters around it. Not done for a next hop heard in the
   last 10 minutes (needs route tables to know) or when a flood of the same packet has already been heard. Needs `hop.retries` above 0.
   Default on.
+- `get flood.k` / `set flood.k <0-8>`: when this repeater has queued a flood to pass on and then hears `k` other copies of the same
+  flood before its turn to transmit, drop its own copy: the neighbours have the flood covered. Nothing changes on the air, and
+  repeaters around it still relay as before. Only relays are dropped, never a flood this repeater started. 0 = off, exactly as stock.
+  Default 0. In simulation `2` was the best setting and `1` lost on the test topology; neither has been tried on real radios, so
+  turn it on where several repeaters hear each other and watch the counts. The `features` reply shows how many relays were dropped.
 - `get routecache` / `set routecache <on|off>`: remember the path each verified advert took (the `routes` command). Default on.
 - `get ping` / `set ping <on|off>`: answer zero-hop pings from clients. Default on.
 
@@ -723,7 +728,8 @@ Changing a setting other than `route.enable`, `route.margin` or `route.delta` re
 - `set multi.acks <state>`
 
 **Parameters:**
-- `state`: `0` (disable) or `1` (enable)
+- `state`: `0` (disable), or `1` to `3`: how many numbered extra copies of an ack are sent ahead of the plain one, 300 ms apart.
+  Older firmware only allowed `1`. Each relaying repeater that has this set also adds that many copies at its own hop.
 
 **Default:** `0`
 

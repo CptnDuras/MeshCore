@@ -225,6 +225,7 @@ DispatcherAction Mesh::onRecvPacket(Packet* pkt) {
   }
 
   if (pkt->isRouteFlood() && filterRecvFloodPacket(pkt)) return ACTION_RELEASE;
+  if (_flood_cancel_k && pkt->isRouteFlood()) cancelQueuedFlood(pkt);
 
   DispatcherAction action = ACTION_RELEASE;
 
@@ -453,6 +454,30 @@ void Mesh::removeSelfFromPath(Packet* pkt) {
   uint8_t sz = pkt->getPathHashSize();
   for (int k = 0; k < pkt->getPathHashCount()*sz; k += sz) {  // shuffle path by 1 'entry'
     memcpy(&pkt->path[k], &pkt->path[k + sz], sz);
+  }
+}
+
+// Another copy of a flood has just arrived. If our own relay of it is still waiting in the queue, count the copy; after
+// _flood_cancel_k of them the neighbours have it covered and the relay is dropped. Nothing changes on the wire: the packet
+// is already marked seen, so later copies are ignored as before. Only relays are touched (our hash ends their path), never
+// a flood this node started.
+void Mesh::cancelQueuedFlood(const Packet* heard) {
+  uint8_t h[MAX_HASH_SIZE], q[MAX_HASH_SIZE];
+  bool have_hash = false;
+  for (int i = 0; i < _mgr->getOutboundTotal(); i++) {
+    Packet* p = _mgr->getOutboundByIdx(i);
+    uint8_t n = p ? p->getPathHashCount() : 0;
+    if (n == 0 || !p->isRouteFlood() || p->getPayloadType() != heard->getPayloadType()) continue;
+    uint8_t hs = p->getPathHashSize();
+    if (!self_id.isHashMatch(&p->path[(n - 1) * hs], hs)) continue;   // not a relay of ours
+    if (!have_hash) { heard->calculatePacketHash(h); have_hash = true; }
+    p->calculatePacketHash(q);
+    if (memcmp(h, q, MAX_HASH_SIZE) != 0) continue;
+    if (++p->_dups >= _flood_cancel_k) {
+      releasePacket(_mgr->removeOutboundByIdx(i));
+      n_flood_cancels++;
+    }
+    return;   // a relay is queued once
   }
 }
 

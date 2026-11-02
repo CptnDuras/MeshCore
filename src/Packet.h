@@ -50,6 +50,7 @@ public:
   uint8_t path[MAX_PATH_SIZE];
   uint8_t payload[MAX_PACKET_PAYLOAD];
   int8_t _snr;
+  uint8_t _dups;   // not sent: copies of this flood heard while its relay waits in the queue (see Mesh::cancelQueuedFlood)
 
   /**
    * \brief calculate the hash of payload + type

@@ -49,6 +49,9 @@ class Mesh : public Dispatcher {
   uint8_t _hop_retries_max;
   bool _hop_fallback;   // flood a relayed unicast packet when the next hop never answers, instead of dropping it
   bool _hop_rescue;     // ...and also take over a unicast packet this node only overheard, when its next hop never passes it on
+  uint8_t _flood_cancel_k;   // drop our queued relay of a flood once this many other copies of it have been heard (0 = off, as stock)
+  uint32_t n_flood_cancels;
+  void cancelQueuedFlood(const Packet* heard);
   uint32_t hopWaitMillis(int len_bytes) const;
   void trackHopForward(const Packet* pkt, uint8_t priority, uint32_t delay_millis, uint8_t role = HOP_OWN);
   void serviceHopRetries();
@@ -234,7 +237,13 @@ protected:
     _hop_rescue = true;
     n_routed_fwd = n_routed_delivered = n_routed_dropped = n_routed_sent = 0;
     _hop_retries_max = MESH_HOP_RETRIES;
+    _flood_cancel_k = 0;
+    n_flood_cancels = 0;
   }
+
+  uint8_t getFloodCancel() const { return _flood_cancel_k; }
+  void setFloodCancel(uint8_t k) { _flood_cancel_k = k; }
+  uint32_t getNumFloodCancels() const { return n_flood_cancels; }   // queued relays dropped because neighbours had already covered the flood
 
   uint32_t getNumHopRetries() const { return n_hop_retries; }   // unicast packets sent again
   uint32_t getNumHopAcks() const { return n_hop_acks; }         // times the next hop was heard passing one on

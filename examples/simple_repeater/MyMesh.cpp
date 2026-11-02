@@ -1184,6 +1184,7 @@ void MyMesh::formatFeaturesReply(char *reply) {
   if (_prefs.route_cache_en) addTo(reply, cap, "route-cache:%d/%d ", route_cache.count(), MAX_ROUTE_CACHE);
   else addTo(reply, cap, "route-cache:off ");
   addTo(reply, cap, "ping:%s ", _prefs.ping_en ? "on" : "off");
+  if (getFloodCancel()) addTo(reply, cap, "flood-k:%d (dropped %lu) ", getFloodCancel(), (unsigned long)getNumFloodCancels());
   if (routing) {
     uint32_t now = monoSeconds();
     addTo(reply, cap, "route:on (nbrs %d, clients %d, routes %d) routed:fwd %lu dlv %lu drop %lu", routing->links.count(), routing->attached.count(now),
@@ -1207,6 +1208,7 @@ void MyMesh::applyFeatureConfig() {
   setHopRetries(_prefs.hop_retries);
   setHopFallback(_prefs.hop_fallback != 0);
   setHopRescue(_prefs.hop_rescue != 0);
+  setFloodCancel(_prefs.flood_cancel);
   const mesh::RouteConfigValues& v = _prefs.route_cfg;
   bool same = routing && routing_applied.id_bytes == v.id_bytes && routing_applied.full_period_s == v.full_period_s &&
               routing_applied.life_s == v.life_s && routing_applied.refresh_pct == v.refresh_pct &&
