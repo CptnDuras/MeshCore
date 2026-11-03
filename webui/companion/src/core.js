@@ -174,29 +174,40 @@
   // A node without the log answers with an error, and the page just carries on with what the browser has.
   // The order of a conversation is the order the messages arrived, never their timestamps: a timestamp is the sender's clock (or this node's, for what
   // you sent), and a clock that is wrong would otherwise move messages out of place and get the wrong ones trimmed.
+  // Each answer is merged as it arrives and a request that gets no answer is tried again, so one lost frame costs a retry, not the whole history
+  // (the node holds a few hundred records and sends only a record or two per answer).
   async function loadHistory() {
-    var first = 0, added = 0, byConv = {};
+    var first = 0, added = 0, ats = {}, fails = 0, err = null, g = gen;
     for (;;) {
-      var h = await req(MC.enc.getHistory(first), ['history']);
+      var h;
+      try { h = await req(MC.enc.getHistory(first), ['history']); } catch (e) {
+        err = e; if (++fails > 3 || g !== gen) break;
+        continue;
+      }
+      fails = 0;
+      var byConv = {};
       h.recs.forEach(function (r) { var m = recordMessage(r); if (m) (byConv[m.conv] = byConv[m.conv] || []).push(m.msg); });
+      for (var k in byConv) added += mergeInOrder(k, byConv[k], ats);
       first += h.recs.length;
-      if (!h.recs.length || first >= h.total) break;
+      if (!h.recs.length || first >= h.total) { err = null; break; }
     }
-    for (var k in byConv) added += mergeInOrder(k, byConv[k]);
     if (added) { persist(); bus.emit('history'); }
+    if (err) throw err;
   }
   function sameMsg(x, m) { return !!x.me === !!m.me && x.ts === m.ts && x.text === m.text && (m.me || x.who === m.who); }
   // Merges the node's messages for one conversation (oldest first) into what the browser has, keeping both orders: a message the browser lacks goes
   // straight after the node's previous message, wherever that sits in the browser's list.
-  function mergeInOrder(conv, msgs) {
-    var list = S.convs[conv] = S.convs[conv] || [], at = -1, added = 0;
+  // `ats` carries the insert position of each conversation from one batch to the next.
+  function mergeInOrder(conv, msgs, ats) {
+    var list = S.convs[conv] = S.convs[conv] || [], at = ats && conv in ats ? ats[conv] : -1, added = 0;
     msgs.forEach(function (m) {
       var idx = -1; for (var i = 0; i < list.length; i++) if (sameMsg(list[i], m)) { idx = i; break; }
       if (idx >= 0) { if (idx > at) at = idx; return; }
       m.id = m.id || (Date.now().toString(36) + Math.random().toString(36).slice(2, 7));
       list.splice(++at, 0, m); added++;
     });
-    if (list.length > 400) list.splice(0, list.length - 400);   // the oldest by arrival
+    if (list.length > 400) { var cut = list.length - 400; list.splice(0, cut); at = Math.max(-1, at - cut); }   // the oldest by arrival
+    if (ats) ats[conv] = at;
     return added;
   }
   // One record from the node as { conv, msg }, or null for what is not a chat message (commands, reactions).
