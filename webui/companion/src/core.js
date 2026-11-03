@@ -175,39 +175,45 @@
   // A node without the log answers with an error, and the page just carries on with what the browser has.
   // The order of a conversation is the order the messages arrived, never their timestamps: a timestamp is the sender's clock (or this node's, for what
   // you sent), and a clock that is wrong would otherwise move messages out of place and get the wrong ones trimmed.
-  // Each answer is merged as it arrives and a request that gets no answer is tried again, so one lost frame costs a retry, not the whole history
-  // (the node holds a few hundred records and sends only a record or two per answer).
-  // The newest records are fetched first and shown at once; the older ones follow behind them (a whole log takes a couple of hundred answers).
+  // The newest records are fetched first and shown at once; the older ones follow behind them (a whole log takes a couple of hundred answers,
+  // because the node sends only a record or two per answer).
   var RECENT_HISTORY = 40;
-  async function loadHistory() {
-    var added = 0, fails = 0, err = null, g = gen;
-    // Fetches records from `from` up to `to`. `tail`: what the browser has no neighbour for goes at the end of its conversation, as the newest does.
-    async function pass(from, to, tail) {
-      var first = from, ats = {};
-      while (first < to) {
-        var h;
-        try { h = await req(MC.enc.getHistory(first), ['history']); } catch (e) {
-          err = e; if (++fails > 3 || g !== gen) return false;
-          continue;
-        }
-        fails = 0; err = null;
-        var byConv = {};
-        h.recs.forEach(function (r) { var m = recordMessage(r); if (m) (byConv[m.conv] = byConv[m.conv] || []).push(m.msg); });
-        for (var k in byConv) added += mergeInOrder(k, byConv[k], ats, tail);
-        if (!h.recs.length) break;
-        first += h.recs.length;
+  // Tells the screens what a history merge changed, as a live message does, but not as incoming: no sound, no unread count.
+  function announce(changed) {
+    for (var k in changed) { var l = S.convs[k]; if (l && l.length) bus.emit('msg', { conv: k, msg: l[l.length - 1], incoming: false }); }
+    bus.emit('channels');
+  }
+  // Reads the records from `from` to `to` and merges them in one go, so each missing message is placed against its real neighbours. A request that
+  // gets no answer is tried again, and what was read before a failure is still merged. `tail`: see mergeInOrder. `patient`: wait for anything the
+  // person does (sending, opening a chat) instead of queueing in front of it. False if the node stopped answering.
+  async function readHistory(from, to, tail, g, patient) {
+    var first = from, byConv = {}, fails = 0, ok = true, changed = {}, added = 0;
+    while (first < to) {
+      if (patient) while ((queue.length || cur) && g === gen) await new Promise(function (r) { setTimeout(r, 150); });
+      var h;
+      try { h = await req(MC.enc.getHistory(first), ['history']); } catch (e) {
+        if (++fails > 3 || g !== gen) { ok = false; break; }
+        continue;
       }
-      return true;
+      fails = 0;
+      h.recs.forEach(function (r) { var m = recordMessage(r); if (m) (byConv[m.conv] = byConv[m.conv] || []).push(m.msg); });
+      if (!h.recs.length) break;
+      first += h.recs.length;
     }
-    var total;
+    if (g !== gen) return false;
+    for (var k in byConv) { var n = mergeInOrder(k, byConv[k], tail); added += n; if (n) changed[k] = 1; }
+    if (added) { persist(); announce(changed); }
+    return ok;
+  }
+  async function loadHistory() {
+    var g = gen, total, fails = 0;
     for (;;) {   // a first beyond the end gets no records, only the count
       try { total = (await req(MC.enc.getHistory(0xffff), ['history'])).total; break; } catch (e) { if (++fails > 3 || g !== gen) throw e; }
     }
-    fails = 0; histTotal = total;
-    var start = Math.max(0, total - RECENT_HISTORY);
-    if (await pass(start, total, true) && start > 0) { if (added) { persist(); bus.emit('history'); } await pass(0, start, false); }
-    if (added) { persist(); bus.emit('history'); }
-    if (err) throw err;
+    histTotal = total;
+    var start = Math.max(0, total - RECENT_HISTORY), ok = await readHistory(start, total, true, g, false);
+    if (ok && start > 0) ok = await readHistory(0, start, false, g, true);
+    if (!ok) throw new Error('the node stopped answering while its history was read');
   }
   // The log is the node's record of everything it received, so the page also asks it for news now and then: a lost "message waiting" push, or a
   // connection that went quiet, then costs a few seconds instead of the message. Messages the push already delivered are recognised and skipped.
@@ -220,36 +226,28 @@
       try {
         var total = (await req(MC.enc.getHistory(0xffff), ['history'], { ms: 4000 })).total;
         if (total !== histTotal) {
-          var from = total > histTotal ? Math.max(0, histTotal - 2) : Math.max(0, total - RECENT_HISTORY), ats = {}, added = 0, first = from;
-          while (first < total) {
-            var h = await req(MC.enc.getHistory(first), ['history']), byConv = {};
-            h.recs.forEach(function (r) { var m = recordMessage(r); if (m) (byConv[m.conv] = byConv[m.conv] || []).push(m.msg); });
-            for (var k in byConv) added += mergeInOrder(k, byConv[k], ats, true);
-            if (!h.recs.length) break;
-            first += h.recs.length;
-          }
-          histTotal = total;
-          if (added) { persist(); bus.emit('history'); }
+          var from = total > histTotal ? Math.max(0, histTotal - 2) : Math.max(0, total - RECENT_HISTORY);
+          if (await readHistory(from, total, true, gen, false)) histTotal = total;
         }
       } catch (e) { /* the next round tries again */ } finally { histBusy = false; }
     }, 8000);
   }
   function sameMsg(x, m) { return !!x.me === !!m.me && x.ts === m.ts && x.text === m.text && (m.me || x.who === m.who); }
   // Merges the node's messages for one conversation (oldest first) into what the browser has, keeping both orders: a message the browser lacks goes
-  // straight after the node's previous message, wherever that sits in the browser's list.
-  // `ats` carries the insert position of each conversation from one batch to the next.
-  // `tail`: with no neighbour to follow yet, a message goes at the end of the list instead of the start.
-  function mergeInOrder(conv, msgs, ats, tail) {
-    var list = S.convs[conv] = S.convs[conv] || [], at = ats && conv in ats ? ats[conv] : -1, added = 0;
+  // straight after the one before it in the node's log, wherever that sits in the browser's list, and one with nothing before it that the browser has
+  // goes just ahead of the first the browser does have. With none in common, `tail` puts them after what the browser has (the newest), else before.
+  function mergeInOrder(conv, msgs, tail) {
+    var list = S.convs[conv] = S.convs[conv] || [], added = 0;
+    function find(m) { for (var i = 0; i < list.length; i++) if (sameMsg(list[i], m)) return i; return -1; }
+    var at = tail ? list.length - 1 : -1;
+    for (var j = 0; j < msgs.length; j++) { var f = find(msgs[j]); if (f >= 0) { at = f - 1; break; } }
     msgs.forEach(function (m) {
-      var idx = -1; for (var i = 0; i < list.length; i++) if (sameMsg(list[i], m)) { idx = i; break; }
+      var idx = find(m);
       if (idx >= 0) { if (idx > at) at = idx; return; }
       m.id = m.id || (Date.now().toString(36) + Math.random().toString(36).slice(2, 7));
-      at = tail && at < 0 ? list.length : at + 1;
-      list.splice(at, 0, m); added++;
+      list.splice(++at, 0, m); added++;
     });
-    if (list.length > 400) { var cut = list.length - 400; list.splice(0, cut); at = Math.max(-1, at - cut); }   // the oldest by arrival
-    if (ats) ats[conv] = at;
+    if (list.length > 400) list.splice(0, list.length - 400);   // the oldest by arrival
     return added;
   }
   // One record from the node as { conv, msg }, or null for what is not a chat message (commands, reactions).
