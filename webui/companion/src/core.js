@@ -36,13 +36,14 @@
     saveTimer = setTimeout(function () {
       saveTimer = 0; if (!S.self) return;
       var c = {}; for (var k in S.convs) c[k] = S.convs[k].slice(-300).map(function (m) { var o = Object.assign({}, m); delete o.timer; return o; });
-      store.set(nodeKey('convs'), c); store.set(nodeKey('unread'), S.unread); store.set(nodeKey('muted'), S.muted);
+      store.set(nodeKey('convs2'), c); store.set(nodeKey('unread'), S.unread); store.set(nodeKey('muted'), S.muted);
       store.set(nodeKey('groups'), S.groups); store.set(nodeKey('communities'), S.communities); store.set(nodeKey('chorder'), S.chOrder);
       store.set(nodeKey('regions'), { list: S.regions, def: S.defaultRegion, per: S.chRegion });
     }, 400);
   }
   function restore() {
-    S.convs = store.get(nodeKey('convs'), {}); S.unread = store.get(nodeKey('unread'), {}); S.muted = store.get(nodeKey('muted'), {});
+    // 'convs2': the conversations are kept under a new name since the history merge changed. A list saved by an earlier version may not be in the node's order, and the merge keeps the order of what the browser has.
+    S.convs = store.get(nodeKey('convs2'), {}); S.unread = store.get(nodeKey('unread'), {}); S.muted = store.get(nodeKey('muted'), {});
     S.groups = store.get(nodeKey('groups'), {}); S.communities = store.get(nodeKey('communities'), []); S.chOrder = store.get(nodeKey('chorder'), []);
     var r = store.get(nodeKey('regions'), { list: [], def: '', per: {} }); S.regions = r.list || []; S.defaultRegion = r.def || ''; S.chRegion = r.per || {};
     for (var k in S.convs) S.convs[k].forEach(function (m) { if (m.status === 'sending') m.status = 'failed'; if (m.status === 'sent' && m.me && !m.channel) m.status = 'unconfirmed'; });
