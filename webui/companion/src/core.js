@@ -178,7 +178,7 @@
   // you sent), and a clock that is wrong would otherwise move messages out of place and get the wrong ones trimmed.
   // The newest records are fetched first and shown at once; the older ones follow behind them (a whole log takes a couple of hundred answers,
   // because the node sends only a record or two per answer).
-  var RECENT_HISTORY = 40;
+  var RECENT_HISTORY = 40, HISTORY_DEPTH = 500;   // the newest records shown at once, and the most the page reads back (it keeps 400 a conversation)
   // Tells the screens what a history merge changed, as a live message does, but not as incoming: no sound, no unread count.
   function announce(changed) {
     for (var k in changed) { var l = S.convs[k]; if (l && l.length) bus.emit('msg', { conv: k, msg: l[l.length - 1], incoming: false }); }
@@ -213,7 +213,7 @@
     }
     histTotal = total;
     var start = Math.max(0, total - RECENT_HISTORY), ok = await readHistory(start, total, true, g, false);
-    if (ok && start > 0) ok = await readHistory(0, start, false, g, true);
+    if (ok && start > 0) ok = await readHistory(Math.max(0, total - HISTORY_DEPTH), start, false, g, true);
     if (!ok) throw new Error('the node stopped answering while its history was read');
   }
   // The log is the node's record of everything it received, so the page also asks it for news now and then: a lost "message waiting" push, or a
