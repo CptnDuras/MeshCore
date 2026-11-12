@@ -102,7 +102,7 @@ select.sel,.chipsel{padding:7px 8px;border:1px solid var(--line);border-radius:1
 
 /* cards, forms, settings */
 .page{flex:1;min-height:0;overflow:auto;-webkit-overflow-scrolling:touch;padding:18px;display:flex;flex-direction:column;gap:14px;align-items:center}
-.page>*{width:100%;max-width:760px}
+.page>*{width:100%;max-width:760px;flex:none}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;box-shadow:var(--shadow)}
 .card h2{font-size:15px;margin-bottom:10px}.card h2 small{font-weight:400;color:var(--dim);margin-left:6px}
 .kv{display:grid;grid-template-columns:minmax(110px,max-content) 1fr;gap:6px 16px;margin:0}
