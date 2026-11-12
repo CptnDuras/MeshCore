@@ -9,6 +9,7 @@
   --mine:#14606a;--mine-ink:#eafcff;--theirs:#1f262d;color-scheme:dark}}
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
+@supports (height:100dvh){html,body{height:100dvh}}
 body{background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%}
 button,input,select,textarea{font:inherit;color:inherit}
 a{color:var(--accent)}
@@ -30,7 +31,7 @@ h1,h2,h3{margin:0;font-weight:650}
 #statusdot i{width:10px;height:10px;border-radius:50%;background:var(--dim)}
 #statusdot.online i{background:var(--ok)}#statusdot.connecting i{background:var(--warn);animation:pulse 1s infinite}#statusdot.offline i,#statusdot.error i{background:var(--bad)}
 @keyframes pulse{50%{opacity:.3}}
-#main{flex:1;min-width:0;display:flex;flex-direction:column}
+#main{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column}
 #banner{display:none;padding:8px 14px;background:var(--warn-soft);color:var(--warn);font-size:13px;text-align:center}
 #banner.show{display:block}#banner.bad{background:var(--bad-soft);color:var(--bad)}
 .view{flex:1;min-height:0;display:none}.view.sel{display:flex}
@@ -38,7 +39,7 @@ h1,h2,h3{margin:0;font-weight:650}
 /* master / detail */
 .split{flex:1;display:flex;min-width:0;min-height:0}
 .list{width:350px;flex:none;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
-.detail{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--bg)}
+.detail{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--bg)}
 .lhead{display:flex;align-items:center;gap:8px;padding:12px 14px 6px}
 .lhead h1{font-size:19px;flex:1}
 .tools{display:flex;gap:6px;padding:4px 14px 10px;flex-wrap:wrap}
@@ -100,7 +101,7 @@ select.sel,.chipsel{padding:7px 8px;border:1px solid var(--line);border-radius:1
 .jump{position:absolute;right:18px;bottom:96px;box-shadow:var(--shadow)}
 
 /* cards, forms, settings */
-.page{flex:1;overflow:auto;padding:18px;display:flex;flex-direction:column;gap:14px;align-items:center}
+.page{flex:1;min-height:0;overflow:auto;-webkit-overflow-scrolling:touch;padding:18px;display:flex;flex-direction:column;gap:14px;align-items:center}
 .page>*{width:100%;max-width:760px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;box-shadow:var(--shadow)}
 .card h2{font-size:15px;margin-bottom:10px}.card h2 small{font-weight:400;color:var(--dim);margin-left:6px}
