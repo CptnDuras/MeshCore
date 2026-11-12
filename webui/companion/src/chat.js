@@ -170,6 +170,7 @@
       if (!m.me && opts.canSend !== false) items.push({ label: 'React', icon: 'star', run: function () { react(m); } });
       items.push({ label: 'Copy text', icon: 'copy', run: function () { UI.copy(m.text); } });
       items.push({ label: 'Details', icon: 'info', run: function () { details(m); } });
+      if (m.route) items.push({ label: 'View route', icon: 'route', run: function () { showRoute(m); } });
       if (m.me && (m.status === 'failed' || m.status === 'unconfirmed')) items.push({ label: 'Send again', icon: 'refresh', run: function () { resend(m); } });
       if (m.me && opts.kind !== 'channel' && m.status !== 'delivered' && m.status !== 'sending') items.push({ label: 'Send by flood', icon: 'refresh', run: function () { resend(m, true); } });
       items.push({ sep: true });
@@ -178,11 +179,24 @@
       } });
       UI.menu(anchor, items);
     }
+    // the repeaters a received message passed through, in order from its sender (recorded when the page was open to hear it)
+    function showRoute(m) {
+      var list = el('ol', { class: 'route' });
+      function stop(label, note) { list.appendChild(el('li', {}, [el('b', { text: label }), note ? el('small', { text: ' ' + note }) : null])); }
+      stop(m.who || 'Sender', 'sent it');
+      m.route.forEach(function (h) {
+        var f = W.nodeForHash(h);
+        stop(f.node ? f.node.name : 'Unknown repeater', f.ambiguous ? '(' + h + ', more than one node starts this way)' : '(' + h + ')');
+      });
+      stop((S.self && S.self.name) || 'You', 'heard it' + (m.snr != null ? ' at ' + m.snr + ' dB' : ''));
+      UI.dialog('Route taken', [el('p', { class: 'dim', text: m.route.length ? m.route.length + (m.route.length === 1 ? ' repeater' : ' repeaters') + ' passed it on.' : 'Heard directly, with no repeater between.' }), list], [{ label: 'Close', value: 0 }]);
+    }
     function details(m) {
       var rows = [['Sent', new Date(m.ts * 1000).toLocaleString()], ['Direction', m.me ? 'outgoing' : 'incoming'], ['Status', m.status || 'received']];
       if (m.who) rows.push(['From', m.who]);
       if (m.snr != null) rows.push(['Signal to noise', m.snr + ' dB']);
       if (m.hops != null) rows.push(['Route', m.hops < 0 ? 'flood (no direct path)' : m.hops === 0 ? 'direct' : m.hops + ' hops']);
+      if (m.route && m.route.length) rows.push(['Through', m.route.map(function (h) { var f = W.nodeForHash(h); return f.node ? f.node.name : h; }).join(' → ')]);
       if (m.tries) rows.push(['Attempts', String(m.tries)]);
       if (m.ms) rows.push(['Round trip', (m.ms / 1000).toFixed(2) + ' s']);
       if (m.region) rows.push(['Region', '#' + m.region]);

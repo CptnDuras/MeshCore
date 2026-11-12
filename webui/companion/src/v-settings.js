@@ -7,6 +7,7 @@
   var AUTO = [[0x02, 'People (companions)'], [0x04, 'Repeaters'], [0x08, 'Room servers'], [0x10, 'Sensors'], [0x01, 'Replace the oldest when full']];
 
   function fail(e) { UI.toast(e.message, 'bad'); }
+  function sendAdvert(flood) { W.req(MC.enc.advert(flood), ['ok']).then(function () { UI.toast(flood ? 'Advert sent across the mesh' : 'Advert sent to nearby nodes'); }, fail); }
   async function refreshSelf() { S.self = await W.req(MC.enc.appStart('web'), ['self']); W.bus.emit('self'); render(); }
   async function refreshDevice() { S.dev = await W.req(MC.enc.deviceQuery(), ['device']); render(); }
   function row(title, sub, ctl, onclick) {
@@ -148,6 +149,10 @@
         row('Node name', s.name, UI.icon('gear', 18), editName),
         row('Position', s.lat || s.lon ? s.lat.toFixed(5) + ', ' + s.lon.toFixed(5) : 'Not set', UI.icon('gear', 18), editPosition),
         S.vars && S.vars.gps !== undefined ? row('GPS receiver', 'Use the board\'s GPS for the position', toggle(S.vars.gps === '1', function (on) { W.req(MC.enc.setVar('gps', on ? '1' : '0'), ['ok']).then(function () { S.vars.gps = on ? '1' : '0'; }, function (e) { fail(e); render(); }); })) : null
+      ]));
+      page.appendChild(card('Advert', [
+        row('Send an advert to nearby nodes', 'Heard by the nodes that can hear this one directly.', UI.icon('antenna', 18), function () { sendAdvert(false); }),
+        row('Send an advert across the mesh', 'Repeaters pass it on, so far-off nodes learn about this one. Use it sparingly.', UI.icon('antenna', 18), function () { sendAdvert(true); })
       ]));
       page.appendChild(card('Radio', [
         row('Radio settings', (s.freqMHz).toFixed(3) + ' MHz · ' + s.bwKHz + ' kHz · SF' + s.sf + ' · 4/' + s.cr + ' · ' + s.txPower + ' dBm', UI.icon('antenna', 18), editRadio),

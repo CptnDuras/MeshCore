@@ -277,7 +277,7 @@
     if (reactionOf(conv, who, text, m.ts)) { persist(); return; }
     var dup = (S.convs[conv] || []).some(function (x) { return !x.me && x.ts === m.ts && x.text === text && x.who === who; });
     if (dup) return;
-    var msg = addMsg(conv, Object.assign({ me: false, channel: !!m.channel, text: text, ts: m.ts, who: who, snr: m.snr, hops: m.pathLen === 255 ? -1 : m.pathLen & 63, cli: !m.channel && (m.kind >> 2) === 1, recvAt: Math.floor(Date.now() / 1000) }, extra));
+    var msg = addMsg(conv, Object.assign({ me: false, channel: !!m.channel, text: text, ts: m.ts, who: who, snr: m.snr, hops: m.pathLen === 255 ? -1 : m.pathLen & 63, cli: !m.channel && (m.kind >> 2) === 1, route: routeOf(m), recvAt: Math.floor(Date.now() / 1000) }, extra));
     if (msg.cli) { /* an answer to a command typed at a repeater: it belongs to the console, not the unread count */ }
     else if (S.active !== conv || document.hidden) { S.unread[conv] = (S.unread[conv] || 0) + 1; }
     persist(); bus.emit('msg', { conv: conv, msg: msg, incoming: true });
@@ -305,9 +305,45 @@
   }
   bus.on('msg', function (e) { if (e.incoming && e.msg && !e.msg.cli && !S.muted[e.conv] && (S.active !== e.conv || document.hidden)) beep(); });
 
+  // ---- the packets the radio heard ----
+  // The node tells the page how many hops a message took, not through whom, but it also passes on every packet it hears; the route is in those. A message is
+  // matched to its packet by kind, hop count and signal, the packet having arrived moments before the message.
+  var ROUTE = ['transport flood', 'flood', 'direct', 'transport direct'];
+  var PTYPE = ['request', 'response', 'text', 'ack', 'advert', 'group text', 'group data', 'anon request', 'path', 'trace', 'multipart', 'control'];
+  function parsePacket(raw) {
+    if (raw.length < 2) return null;
+    var h = raw[0], rt = h & 3, pt = h >> 2 & 15, o = 1; if (rt === 0 || rt === 3) o += 4;
+    var pl = raw[o++], w = (pl >> 6 & 3) + 1, n = pl & 63;
+    if (pl === 255) { n = 0; w = 1; }
+    return { route: ROUTE[rt], type: pt === 15 ? 'raw' : PTYPE[pt] || '0x' + pt.toString(16), hops: n, width: w, path: MC.hex(raw, o, Math.min(n * w, raw.length - o)).match(new RegExp('.{1,' + w * 2 + '}', 'g')) || [], size: raw.length };
+  }
+  var recentRx = [];
+  function noteRx(m) {
+    var p = m.raw && parsePacket(m.raw); if (!p) return;
+    recentRx.push({ at: Date.now(), type: p.type, hops: p.hops, path: p.path, snr: m.snr, used: false });
+    if (recentRx.length > 80) recentRx.shift();
+  }
+  // the route of a message just received: the repeaters it passed through, in order from the sender, or null when no packet fits
+  function routeOf(m) {
+    var type = m.channel ? 'group text' : 'text', hops = m.pathLen === 255 ? -1 : m.pathLen & 63, now = Date.now();
+    for (var i = 0; i < recentRx.length; i++) {
+      var r = recentRx[i];
+      if (r.used || r.type !== type || r.hops !== hops || now - r.at > 20000 || (m.snr != null && Math.abs(r.snr - m.snr) > 0.3)) continue;
+      r.used = true; return r.path;
+    }
+    return null;
+  }
+  // the repeater a route entry (the first bytes of its key) stands for: a contact whose key starts with it, as long as that is not a guess between several
+  function nodeForHash(h) {
+    var hit = null, n = 0; h = String(h).toLowerCase();
+    for (var k in S.contacts) if (k.indexOf(h) === 0 && S.contacts[k].type !== 1) { hit = S.contacts[k]; n++; }
+    return { node: n === 1 ? hit : null, ambiguous: n > 1 };
+  }
+
   // ---- push events ----
   function push(m) {
     switch (m.t) {
+      case 'rx': noteRx(m); bus.emit('push', m); break;
       case 'contact': S.contacts[m.key] = m; S.seen[m.key] = Date.now(); bus.emit('contacts'); break;
       case 'newAdvert':
         // unknown node heard: it is a contact only if the node stored it (auto-add), otherwise it waits in the discovered list
@@ -393,5 +429,5 @@
     syncClock: syncClock, loadHistory: loadHistory, loadContacts: loadContacts, loadChannels: loadChannels, refreshBattery: refreshBattery, loadAutoAdd: loadAutoAdd, loadVars: loadVars,
     syncAll: syncAll, findContact: findContact, sendDm: sendDm, sendChannel: sendChannel, sendReaction: sendReaction, EMOJI: EMOJI, msgHash: msgHash,
     clearConv: clearConv, markRead: markRead, unreadTotal: unreadTotal, persist: persist, maxChannelBytes: maxChannelBytes, maxDmBytes: maxDmBytes,
-    regionFor: regionFor, nodeKey: nodeKey, attempt: attempt, addMsg: addMsg };
+    regionFor: regionFor, nodeKey: nodeKey, attempt: attempt, addMsg: addMsg, parsePacket: parsePacket, nodeForHash: nodeForHash };
 })(window);

@@ -186,20 +186,65 @@
       el('div', { class: 'btnrow', style: 'margin:8px 0' }, [go]), out]);
   }
 
-  // ---- radio log: every packet this radio hears, decoded just far enough to read ----
-  var ROUTE = ['transport flood', 'flood', 'direct', 'transport direct'];
-  var PTYPE = ['request', 'response', 'text', 'ack', 'advert', 'group text', 'group data', 'anon request', 'path', 'trace', 'multipart', 'control'];
-  var rxLog = [], rxOn = false, rxPaused = false, rxRepaint = null;
-  function parsePacket(raw) {
-    if (raw.length < 2) return null;
-    var h = raw[0], rt = h & 3, pt = h >> 2 & 15, o = 1; if (rt === 0 || rt === 3) o += 4;
-    var pl = raw[o++], w = (pl >> 6 & 3) + 1, n = pl & 63;
-    if (pl === 255) { n = 0; w = 1; }
-    return { route: ROUTE[rt], type: pt === 15 ? 'raw' : PTYPE[pt] || '0x' + pt.toString(16), hops: n, path: MC.hex(raw, o, Math.min(n * w, raw.length - o)).match(new RegExp('.{1,' + w * 2 + '}', 'g')) || [], size: raw.length };
+  // ---- route to a repeater: find the way there by flooding, then send a trace along it and out again to read the signal at every hop and the time it took ----
+  var routeKey = '', routeRes = null, routeBusy = false;
+  function routeCard() {
+    var width = ((S.dev && S.dev.pathHashMode) || 0) + 1;
+    var reps = Object.keys(S.contacts).map(function (k) { return S.contacts[k]; }).filter(function (c) { return c.type === 2 || c.type === 3; }).sort(function (a, b) { return a.name.localeCompare(b.name); });
+    if (!routeKey || !S.contacts[routeKey]) routeKey = reps.length ? reps[0].key : '';
+    var pick = el('select', { class: 'sel', 'aria-label': 'Repeater', onchange: function (e) { routeKey = e.target.value; routeRes = null; paint(); } },
+      reps.map(function (c) { return el('option', { value: c.key, text: c.name, selected: c.key === routeKey }); }));
+    var out = el('div'), status = el('p', { class: 'dim' });
+    function split(hex) { return hex.match(new RegExp('.{1,' + width * 2 + '}', 'g')) || []; }
+    function label(h) { var f = W.nodeForHash(h); return f.node ? f.node.name : f.ambiguous ? h + ' (more than one match)' : h; }
+    function paint() {
+      UI.clear(out); status.textContent = routeBusy ? routeBusy : '';
+      var r = routeRes; if (!r) return;
+      var rows = r.hops.map(function (h, i) { return el('tr', {}, [el('td', { text: String(i + 1) }), el('td', { text: label(h) }), el('td', { text: r.snrs[i] != null ? r.snrs[i] + ' dB' : '—' })]); });
+      rows.push(el('tr', {}, [el('td', { text: 'end' }), el('td', { text: 'This node' }), el('td', { text: r.lastSnr + ' dB' })]));
+      var legs = r.hops.length, perLeg = legs ? r.ms / legs : r.ms;
+      out.appendChild(el('p', {}, [el('b', { text: 'Route out: ' }), (r.out.length ? r.out.map(label).join(' → ') + ' → ' : '') + r.name + (r.out.length ? '' : ' (direct)'),
+        r.back && r.back.join('') !== r.out.slice().reverse().join('') ? el('span', { class: 'dim', text: '  ·  way back: ' + r.back.map(label).reverse().join(' → ') }) : null]));
+      out.appendChild(el('table', { class: 't' }, [el('tr', {}, ['Hop', 'Node', 'Signal to noise'].map(function (h) { return el('th', { text: h }); }))].concat(rows)));
+      out.appendChild(el('p', { class: 'dim', text: 'Out and back took ' + (r.ms / 1000).toFixed(2) + ' s over ' + legs + (legs === 1 ? ' transmission' : ' transmissions') + ', about ' + Math.round(perLeg) + ' ms each including the repeaters\' waits. Signal is how well each node heard the trace as it passed.' }));
+    }
+    var go = UI.btn('Find the route and measure it', { icon: 'route', kind: 'primary', disabled: S.status !== 'online' || !routeKey, onclick: run });
+    function finish(msg, bad) { routeBusy = false; go.disabled = S.status !== 'online'; if (msg) UI.toast(msg, bad ? 'bad' : ''); paint(); }
+    function run() {
+      var c = S.contacts[routeKey]; if (!c || routeBusy) return;
+      routeRes = null; routeBusy = 'Flooding for a route to ' + c.name + '…'; go.disabled = true; paint();
+      var off = W.bus.on('push', function (m) {
+        if (m.t !== 'pathDiscovery' || c.key.indexOf(m.from) !== 0) return;
+        off(); clearTimeout(t1); trace(c, split(m.outPath), split(m.inPath));
+      });
+      var t1 = setTimeout(function () { off(); finish('No route was found. ' + c.name + ' may be out of range.', true); }, 30000);
+      W.req(MC.enc.pathDiscovery(c.key), ['sent']).catch(function (e) { off(); clearTimeout(t1); finish(e.message, true); });
+    }
+    // the trace goes along the route found, to the repeater and back by the same hops, so each hop reports how well it heard
+    function trace(c, outPath, backPath) {
+      var seq = outPath.concat([c.key.slice(0, width * 2)], outPath.slice().reverse()), bytes = [];
+      seq.forEach(function (h) { for (var i = 0; i < width; i++) bytes.push(parseInt(h.substr(i * 2, 2), 16)); });
+      routeBusy = 'Route found (' + (outPath.length ? outPath.length + (outPath.length === 1 ? ' hop' : ' hops') : 'direct') + '). Measuring…'; paint();
+      var tag = (Math.random() * 0xffffffff) >>> 0, t0 = Date.now();
+      var off = W.bus.on('push', function (m) {
+        if (m.t !== 'trace' || m.tag !== tag) return;
+        off(); clearTimeout(t2);
+        routeRes = { hops: m.hops, snrs: m.snrs, lastSnr: m.lastSnr, ms: Date.now() - t0, out: outPath, back: backPath, name: c.name }; finish('Done');
+      });
+      var t2 = setTimeout(function () { off(); routeRes = null; finish('The route was found but the measuring trace did not come back.', true); }, 30000);
+      W.req(MC.enc.trace(tag, 0, width === 1 ? 0 : width === 2 ? 1 : 2, Uint8Array.from(bytes)), ['sent']).catch(function (e) { off(); clearTimeout(t2); finish(e.message, true); });
+    }
+    paint();
+    return el('section', { class: 'card' }, [el('h2', {}, ['Route to a repeater', el('small', { text: 'signal and time along the whole way' })]),
+      el('p', { class: 'dim', text: 'Floods a request to find how a repeater is reached, then sends a packet along that route and back, and reports how well every hop heard it and how long the round trip took.' }),
+      reps.length ? el('div', { class: 'btnrow' }, [pick, go]) : el('p', { class: 'tag warn', text: 'No repeaters in your contacts yet.' }), status, out]);
   }
+
+  // ---- radio log: every packet this radio hears, decoded just far enough to read ----
+  var rxLog = [], rxOn = false, rxPaused = false, rxRepaint = null;
   W.bus.on('push', function (m) {
     if (m.t !== 'rx' || rxPaused) return;
-    var p = parsePacket(m.raw); if (!p) return; p.t = Math.floor(Date.now() / 1000); p.snr = m.snr; p.rssi = m.rssi;
+    var p = W.parsePacket(m.raw); if (!p) return; p.t = Math.floor(Date.now() / 1000); p.snr = m.snr; p.rssi = m.rssi;
     rxLog.push(p); if (rxLog.length > 300) rxLog.shift(); if (rxRepaint) rxRepaint();
   });
   function logCard() {
@@ -217,7 +262,7 @@
       el('div', { class: 'btnrow', style: 'margin-bottom:8px' }, [pause, UI.btn('Clear', { onclick: function () { rxLog = []; paint(); } })]), out]);
   }
 
-  var TABS = [['ping', 'Ping', pingCard], ['discover', 'Discover', discoverCard], ['trace', 'Path trace', traceCard], ['log', 'Radio log', logCard], ['stats', 'Statistics', statsCard], ['console', 'Console', consoleCard], ['sensors', 'Sensors', sensorsCard]];
+  var TABS = [['ping', 'Ping', pingCard], ['discover', 'Discover', discoverCard], ['route', 'Route', routeCard], ['trace', 'Path trace', traceCard], ['log', 'Radio log', logCard], ['stats', 'Statistics', statsCard], ['console', 'Console', consoleCard], ['sensors', 'Sensors', sensorsCard]];
   function render() {
     if (!box) return;
     rxRepaint = null; UI.clear(box); page = el('div', { class: 'page' });
