@@ -1115,7 +1115,7 @@ void MyMesh::sendSelfAdvertisement(int delay_millis, bool flood) {
 
 void MyMesh::updateAdvertTimer() {
   if (_prefs.advert_interval > 0) { // schedule local advert timer
-    next_local_advert = futureMillis(((uint32_t)_prefs.advert_interval) * 2 * 60 * 1000);
+    next_local_advert = futureMillis(mesh::advertJitterMs(((uint32_t)_prefs.advert_interval) * 2 * 60 * 1000, getRNG()->nextInt(900, 1101)));
   } else {
     next_local_advert = 0; // stop the timer
   }
@@ -1123,7 +1123,7 @@ void MyMesh::updateAdvertTimer() {
 
 void MyMesh::updateFloodAdvertTimer() {
   if (_prefs.flood_advert_interval > 0) { // schedule flood advert timer
-    next_flood_advert = futureMillis(((uint32_t)_prefs.flood_advert_interval) * 60 * 60 * 1000);
+    next_flood_advert = futureMillis(mesh::advertJitterMs(((uint32_t)_prefs.flood_advert_interval) * 60 * 60 * 1000, getRNG()->nextInt(900, 1101)));
   } else {
     next_flood_advert = 0; // stop the timer
   }
@@ -1184,7 +1184,8 @@ void MyMesh::formatFeaturesReply(char *reply) {
   if (_prefs.route_cache_en) addTo(reply, cap, "route-cache:%d/%d ", route_cache.count(), MAX_ROUTE_CACHE);
   else addTo(reply, cap, "route-cache:off ");
   addTo(reply, cap, "ping:%s ", _prefs.ping_en ? "on" : "off");
-  if (getFloodCancel()) addTo(reply, cap, "flood-k:%d (dropped %lu) ", getFloodCancel(), (unsigned long)getNumFloodCancels());
+  if (getFloodCancel() == FLOOD_CANCEL_AUTO) addTo(reply, cap, "flood-k:auto (hears %d repeaters, dropped %lu) ", getRepeatersHeard(), (unsigned long)getNumFloodCancels());
+  else if (getFloodCancel()) addTo(reply, cap, "flood-k:%d (dropped %lu) ", getFloodCancel(), (unsigned long)getNumFloodCancels());
   if (routing) {
     uint32_t now = monoSeconds();
     addTo(reply, cap, "route:on (nbrs %d, clients %d, routes %d) routed:fwd %lu dlv %lu drop %lu", routing->links.count(), routing->attached.count(now),

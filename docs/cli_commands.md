@@ -144,18 +144,23 @@ Saved with the other settings; they take effect at once.
   only to packets this repeater was passing on for someone else, never its own, and only to messages, requests, replies, acks and
   path returns. The flood starts with this repeater's hash in its path, so the far end's path return gives the sender a route it can
   use, replacing its stale cached one. A scoped packet stays in its scope; an unscoped one floods unscoped, so a network that blocks
-  unscoped floods drops it. Needs `hop.retries` above 0. Default on.
+  unscoped floods drops it. Needs `hop.retries` above 0. Default off: in simulation it cost 1 to 2 points of delivery on a mesh of many
+  repeaters, because the extra floods collide with other traffic; it helped only on a thin chain of repeaters.
 - `get hop.rescue` / `set hop.rescue <on|off>`: also act on a unicast packet this repeater only *overheard*, that is addressed to another
   repeater as the next hop. If that repeater is not heard passing it on within about twice its normal time (plus a random stagger, so
   usually only one of several listeners acts), flood it from here, the same way as `hop.fallback`. This covers the first hop: a client
   whose cached path starts at a repeater that has died is still heard by the repeaters around it. Not done for a next hop heard in the
   last 10 minutes (needs route tables to know) or when a flood of the same packet has already been heard. Needs `hop.retries` above 0.
-  Default on.
-- `get flood.k` / `set flood.k <0-8>`: when this repeater has queued a flood to pass on and then hears `k` other copies of the same
+  Default off: in simulation about 70% of its floods were unnecessary and it cost 3 to 7 points of delivery on a mesh of many
+  repeaters. A repeater that saved `on` earlier keeps it until you set it.
+- `get flood.k` / `set flood.k <auto|0-8>`: when this repeater has queued a flood to pass on and then hears `k` other copies of the same
   flood before its turn to transmit, drop its own copy: the neighbours have the flood covered. Nothing changes on the air, and
-  repeaters around it still relay as before. Only relays are dropped, never a flood this repeater started. 0 = off, exactly as stock.
-  Default 0. In simulation `2` was the best setting and `1` lost on the test topology; neither has been tried on real radios, so
-  turn it on where several repeaters hear each other and watch the counts. The `features` reply shows how many relays were dropped.
+  repeaters around it still relay as before. Only relays are dropped, never a flood this repeater started. 0 = off, exactly as stock;
+  1 to 8 = that many copies. `auto` picks `k` from how many other repeaters this one has heard pass on a flood in the last 24 hours:
+  8 or more gives 1, 3 to 7 gives 2, fewer than 3 never drops (a repeater with few neighbours may be the only bridge). Default `auto`
+  for a repeater whose saved settings do not include it yet; a repeater that saved 0 earlier keeps 0 until you set it. In simulation
+  (24 repeaters, 40 clients) `auto` with advert jitter and a 512-entry duplicate table raised delivery from 91% to 95% and cut
+  transmissions by 30%; it has not been tried on real radios. The `features` reply shows how many repeaters it hears and how many relays were dropped.
 - `get routecache` / `set routecache <on|off>`: remember the path each verified advert took (the `routes` command). Default on.
 - `get ping` / `set ping <on|off>`: answer zero-hop pings from clients. Default on.
 

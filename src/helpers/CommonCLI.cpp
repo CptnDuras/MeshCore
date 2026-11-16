@@ -83,7 +83,7 @@ void CommonCLI::loadPrefs(FILESYSTEM* fs) {
       _prefs->hop_rescue = constrain(_prefs->hop_rescue, 0, 1);
       _prefs->route_cache_en = constrain(_prefs->route_cache_en, 0, 1);
       _prefs->ping_en = constrain(_prefs->ping_en, 0, 1);
-      _prefs->flood_cancel = constrain(_prefs->flood_cancel, 0, 8);
+      _prefs->flood_cancel = constrain(_prefs->flood_cancel, 0, FLOOD_CANCEL_AUTO);
       mesh::routeSanitize(_prefs->route_cfg);
       file.close();
     }
@@ -1291,13 +1291,14 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
     }
   } else if (memcmp(config, "flood.k ", 8) == 0) {
     int n = _atoi(&config[8]);
-    if (n >= 0 && n <= 8 && (config[8] >= '0' && config[8] <= '9')) {
-      _prefs->flood_cancel = (uint8_t)n;
+    bool is_auto = strcmp(&config[8], "auto") == 0;
+    if (is_auto || (n >= 0 && n <= 8 && (config[8] >= '0' && config[8] <= '9'))) {
+      _prefs->flood_cancel = is_auto ? FLOOD_CANCEL_AUTO : (uint8_t)n;
       savePrefs();
       _callbacks->onFeatureConfigChanged();
       strcpy(reply, "OK");
     } else {
-      strcpy(reply, "Error, must be 0 (off) to 8");
+      strcpy(reply, "Error, must be auto, or 0 (off) to 8");
     }
   } else if (memcmp(config, "hop.rescue ", 11) == 0) {
     bool on;
@@ -1497,7 +1498,8 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
   } else if (memcmp(config, "hop.retries", 11) == 0) {
     sprintf(reply, "> %d", _prefs->hop_retries);
   } else if (strcmp(config, "flood.k") == 0) {
-    sprintf(reply, "> %d", _prefs->flood_cancel);
+    if (_prefs->flood_cancel == FLOOD_CANCEL_AUTO) strcpy(reply, "> auto");
+    else sprintf(reply, "> %d", _prefs->flood_cancel);
   } else if (strcmp(config, "hop.rescue") == 0) {
     strcpy(reply, _prefs->hop_rescue ? "> on" : "> off");
   } else if (strcmp(config, "hop.fallback") == 0) {

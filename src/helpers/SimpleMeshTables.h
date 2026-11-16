@@ -6,7 +6,10 @@
   #include <FS.h>
 #endif
 
-#define MAX_PACKET_HASHES  (128+32)
+// Under load 160 digests span only tens of seconds, so a late copy of an old flood can look new and be sent again (spec ext/20).
+#ifndef MAX_PACKET_HASHES
+  #define MAX_PACKET_HASHES  512
+#endif
 
 class SimpleMeshTables : public mesh::MeshTables {
   uint8_t _hashes[MAX_PACKET_HASHES*MAX_HASH_SIZE];

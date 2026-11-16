@@ -78,11 +78,11 @@ public:
   uint8_t extra_sf[4];
   // Optional features: all compiled in, all switched here at runtime
   uint8_t hop_retries = 2;      // times a unicast packet is sent again when the next repeater is not heard passing it on (0 = off, 0-3)
-  uint8_t hop_fallback = 1;     // flood a packet this repeater was relaying when the next repeater never answers (0 = drop it, as before)
-  uint8_t hop_rescue = 1;       // also take over a unicast packet this repeater only overheard, when its next hop never passes it on (0 = off)
+  uint8_t hop_fallback = 0;     // flood a packet this repeater was relaying when the next repeater never answers (0 = drop it, as before)
+  uint8_t hop_rescue = 0;       // also take over a unicast packet this repeater only overheard, when its next hop never passes it on (0 = off)
   uint8_t route_cache_en = 1;   // remember the paths adverts took (the `routes` command)
   uint8_t ping_en = 1;          // answer zero-hop pings from clients
-  uint8_t flood_cancel = 0;     // drop a queued relay of a flood after hearing this many other copies of it (0 = off, as stock, 0-8)
+  uint8_t flood_cancel = 9;     // drop a queued relay of a flood after hearing this many other copies of it (0 = off, as stock, 1-8 = that many, 9 = auto: by how many repeaters this one hears)
   mesh::RouteConfigValues route_cfg;   // route tables and adverts (off by default)
 
   // NOTE: observer settings (MQTT/WiFi/timezone/SNMP/alert) are not in NodePrefs.

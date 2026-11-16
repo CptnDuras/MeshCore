@@ -225,6 +225,9 @@ DispatcherAction Mesh::onRecvPacket(Packet* pkt) {
   }
 
   if (pkt->isRouteFlood() && filterRecvFloodPacket(pkt)) return ACTION_RELEASE;
+  if (pkt->isRouteFlood() && pkt->getPathHashCount() > 0) {   // the last hash is the repeater we heard this copy from
+    _heard_repeaters.note(pkt->path[(pkt->getPathHashCount() - 1) * pkt->getPathHashSize()], _ms->getMillis() / 1000);
+  }
   if (_flood_cancel_k && pkt->isRouteFlood()) cancelQueuedFlood(pkt);
 
   DispatcherAction action = ACTION_RELEASE;
@@ -464,6 +467,8 @@ void Mesh::removeSelfFromPath(Packet* pkt) {
 void Mesh::cancelQueuedFlood(const Packet* heard) {
   uint8_t h[MAX_HASH_SIZE], q[MAX_HASH_SIZE];
   bool have_hash = false;
+  uint8_t k = floodCancelCopies(_flood_cancel_k, getRepeatersHeard());
+  if (k == 0) return;   // too few neighbours to be sure this node is not the only bridge: always relay
   for (int i = 0; i < _mgr->getOutboundTotal(); i++) {
     Packet* p = _mgr->getOutboundByIdx(i);
     uint8_t n = p ? p->getPathHashCount() : 0;
@@ -473,7 +478,7 @@ void Mesh::cancelQueuedFlood(const Packet* heard) {
     if (!have_hash) { heard->calculatePacketHash(h); have_hash = true; }
     p->calculatePacketHash(q);
     if (memcmp(h, q, MAX_HASH_SIZE) != 0) continue;
-    if (++p->_dups >= _flood_cancel_k) {
+    if (++p->_dups >= k) {
       releasePacket(_mgr->removeOutboundByIdx(i));
       n_flood_cancels++;
     }

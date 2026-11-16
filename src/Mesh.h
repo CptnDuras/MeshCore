@@ -3,6 +3,7 @@
 #include <Dispatcher.h>
 #include <helpers/HopRetryTable.h>
 #include <helpers/HopFallback.h>
+#include <helpers/FloodSuppress.h>
 #include <helpers/PingProtocol.h>
 #include <helpers/RoutedPacket.h>
 #include <helpers/RoutedHints.h>
@@ -49,8 +50,9 @@ class Mesh : public Dispatcher {
   uint8_t _hop_retries_max;
   bool _hop_fallback;   // flood a relayed unicast packet when the next hop never answers, instead of dropping it
   bool _hop_rescue;     // ...and also take over a unicast packet this node only overheard, when its next hop never passes it on
-  uint8_t _flood_cancel_k;   // drop our queued relay of a flood once this many other copies of it have been heard (0 = off, as stock)
+  uint8_t _flood_cancel_k;   // drop our queued relay of a flood once this many other copies of it have been heard (0 = off, as stock; FLOOD_CANCEL_AUTO = by neighbour count)
   uint32_t n_flood_cancels;
+  HeardRepeaters _heard_repeaters;   // repeaters heard passing on a flood in the last day: what FLOOD_CANCEL_AUTO counts
   void cancelQueuedFlood(const Packet* heard);
   uint32_t hopWaitMillis(int len_bytes) const;
   void trackHopForward(const Packet* pkt, uint8_t priority, uint32_t delay_millis, uint8_t role = HOP_OWN);
@@ -233,8 +235,8 @@ protected:
     : Dispatcher(radio, ms, mgr), _rng(&rng), _rtc(&rtc), _tables(&tables)
   {
     n_hop_retries = n_hop_acks = n_hop_fallbacks = n_hop_rescues = 0;
-    _hop_fallback = true;
-    _hop_rescue = true;
+    _hop_fallback = false;   // both flood a packet that was already being forwarded: more airtime on a mesh that is mostly short of it (spec ext/108)
+    _hop_rescue = false;
     n_routed_fwd = n_routed_delivered = n_routed_dropped = n_routed_sent = 0;
     _hop_retries_max = MESH_HOP_RETRIES;
     _flood_cancel_k = 0;
@@ -243,6 +245,7 @@ protected:
 
   uint8_t getFloodCancel() const { return _flood_cancel_k; }
   void setFloodCancel(uint8_t k) { _flood_cancel_k = k; }
+  int getRepeatersHeard() const { return _heard_repeaters.count(_ms->getMillis() / 1000); }   // repeaters heard directly in the last day
   uint32_t getNumFloodCancels() const { return n_flood_cancels; }   // queued relays dropped because neighbours had already covered the flood
 
   uint32_t getNumHopRetries() const { return n_hop_retries; }   // unicast packets sent again
