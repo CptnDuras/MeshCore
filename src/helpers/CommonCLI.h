@@ -82,7 +82,9 @@ public:
   uint8_t hop_rescue = 0;       // also take over a unicast packet this repeater only overheard, when its next hop never passes it on (0 = off)
   uint8_t route_cache_en = 1;   // remember the paths adverts took (the `routes` command)
   uint8_t ping_en = 1;          // answer zero-hop pings from clients
-  uint8_t flood_cancel = 9;     // drop a queued relay of a flood after hearing this many other copies of it (0 = off, as stock, 1-8 = that many, 9 = auto: by how many repeaters this one hears)
+  uint8_t hop_busy = 20;        // no hop retry while the channel load (percent of the last minute spent receiving decoded frames) is above this (0 = always retry)
+  uint8_t advert_busy = 15;     // skip a periodic advert while the channel load is above this percent (0 = never skip)
+  uint8_t flood_cancel = 9;    // drop a queued relay of a flood after hearing this many other copies of it (0 = off, as stock, 1-8 = that many, 9 = auto: by how many repeaters this one hears)
   mesh::RouteConfigValues route_cfg;   // route tables and adverts (off by default)
 
   // NOTE: observer settings (MQTT/WiFi/timezone/SNMP/alert) are not in NodePrefs.
@@ -229,6 +231,8 @@ private:
       def("rcache", _parent->route_cache_en);
       def("ping", _parent->ping_en);
       def("fcancel", _parent->flood_cancel);
+      def("hopbusy", _parent->hop_busy);
+      def("advbusy", _parent->advert_busy);
     }
   public:
     FeaturePrefs(NodePrefs* parent) : _parent(parent) { }

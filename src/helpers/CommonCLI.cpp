@@ -84,6 +84,8 @@ void CommonCLI::loadPrefs(FILESYSTEM* fs) {
       _prefs->route_cache_en = constrain(_prefs->route_cache_en, 0, 1);
       _prefs->ping_en = constrain(_prefs->ping_en, 0, 1);
       _prefs->flood_cancel = constrain(_prefs->flood_cancel, 0, FLOOD_CANCEL_AUTO);
+      _prefs->hop_busy = constrain(_prefs->hop_busy, 0, 100);
+      _prefs->advert_busy = constrain(_prefs->advert_busy, 0, 100);
       mesh::routeSanitize(_prefs->route_cfg);
       file.close();
     }
@@ -1300,6 +1302,26 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
     } else {
       strcpy(reply, "Error, must be auto, or 0 (off) to 8");
     }
+  } else if (memcmp(config, "hop.busy ", 9) == 0) {
+    int n = _atoi(&config[9]);
+    if (n >= 0 && n <= 100 && (config[9] >= '0' && config[9] <= '9')) {
+      _prefs->hop_busy = (uint8_t)n;
+      savePrefs();
+      _callbacks->onFeatureConfigChanged();
+      strcpy(reply, "OK");
+    } else {
+      strcpy(reply, "Error, must be 0 (always retry) to 100 (percent)");
+    }
+  } else if (memcmp(config, "advert.busy ", 12) == 0) {
+    int n = _atoi(&config[12]);
+    if (n >= 0 && n <= 100 && (config[12] >= '0' && config[12] <= '9')) {
+      _prefs->advert_busy = (uint8_t)n;
+      savePrefs();
+      _callbacks->onFeatureConfigChanged();
+      strcpy(reply, "OK");
+    } else {
+      strcpy(reply, "Error, must be 0 (never skip) to 100 (percent)");
+    }
   } else if (memcmp(config, "hop.rescue ", 11) == 0) {
     bool on;
     if (mesh::routeParseOnOff(&config[11], &on)) {
@@ -1500,6 +1522,10 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
   } else if (strcmp(config, "flood.k") == 0) {
     if (_prefs->flood_cancel == FLOOD_CANCEL_AUTO) strcpy(reply, "> auto");
     else sprintf(reply, "> %d", _prefs->flood_cancel);
+  } else if (strcmp(config, "hop.busy") == 0) {
+    sprintf(reply, "> %d", _prefs->hop_busy);
+  } else if (strcmp(config, "advert.busy") == 0) {
+    sprintf(reply, "> %d", _prefs->advert_busy);
   } else if (strcmp(config, "hop.rescue") == 0) {
     strcpy(reply, _prefs->hop_rescue ? "> on" : "> off");
   } else if (strcmp(config, "hop.fallback") == 0) {

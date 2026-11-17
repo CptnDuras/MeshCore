@@ -9,6 +9,7 @@ void Mesh::begin() {
 
 void Mesh::loop() {
   Dispatcher::loop();
+  _load.update(_ms->getMillis(), getReceiveAirTime());
   if (_hop_retries_max) serviceHopRetries();
 }
 
@@ -74,6 +75,11 @@ void Mesh::serviceHopRetries() {
       }
     }
     _hop_retry.release(slot);
+    return;
+  }
+  if (_hop_busy_permille && getChannelLoad() > _hop_busy_permille) {   // a busy channel: another copy competes with everything else on it
+    _hop_retry.release(slot);
+    n_hop_shed++;
     return;
   }
   if (_mgr->getFreeCount() < 2) return;   // keep the last packet buffers for traffic we are receiving

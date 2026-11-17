@@ -161,6 +161,14 @@ Saved with the other settings; they take effect at once.
   for a repeater whose saved settings do not include it yet; a repeater that saved 0 earlier keeps 0 until you set it. In simulation
   (24 repeaters, 40 clients) `auto` with advert jitter and a 512-entry duplicate table raised delivery from 91% to 95% and cut
   transmissions by 30%; it has not been tried on real radios. The `features` reply shows how many repeaters it hears and how many relays were dropped.
+- `get hop.busy` / `set hop.busy <0-100>`: do not send a hop retry while the channel load is above this percent. The load is the share of
+  the last minute this repeater spent receiving frames it decoded (collided and damaged frames are not counted, so a channel full of
+  collisions reads lower than it is). Another copy on a crowded channel competes with everything else on it. 0 = always retry. Default 20.
+  In simulation this left delivery unchanged on ordinary meshes and added 3 to 4 points in overload. `features` shows the load and how many
+  retries were held back.
+- `get advert.busy` / `set advert.busy <0-100>`: skip a periodic advert while the channel load (as above) is above this percent; the next one
+  goes out at its normal time. Adverts are most of what a repeater hears. 0 = never skip. Default 15. In simulation delivery rose 0.1 to 0.8
+  points on ordinary meshes and 22 points in overload. An advert sent with the `advert` command is never held back.
 - `get routecache` / `set routecache <on|off>`: remember the path each verified advert took (the `routes` command). Default on.
 - `get ping` / `set ping <on|off>`: answer zero-hop pings from clients. Default on.
 

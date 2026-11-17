@@ -4,6 +4,7 @@
 #include <helpers/HopRetryTable.h>
 #include <helpers/HopFallback.h>
 #include <helpers/FloodSuppress.h>
+#include <helpers/ChannelLoad.h>
 #include <helpers/PingProtocol.h>
 #include <helpers/RoutedPacket.h>
 #include <helpers/RoutedHints.h>
@@ -52,6 +53,9 @@ class Mesh : public Dispatcher {
   bool _hop_rescue;     // ...and also take over a unicast packet this node only overheard, when its next hop never passes it on
   uint8_t _flood_cancel_k;   // drop our queued relay of a flood once this many other copies of it have been heard (0 = off, as stock; FLOOD_CANCEL_AUTO = by neighbour count)
   uint32_t n_flood_cancels;
+  ChannelLoad _load;            // share of the last minute spent receiving: what the busy gates below look at
+  uint16_t _hop_busy_permille;  // no hop retry while the channel load is above this (0 = always retry)
+  uint32_t n_hop_shed;
   HeardRepeaters _heard_repeaters;   // repeaters heard passing on a flood in the last day: what FLOOD_CANCEL_AUTO counts
   void cancelQueuedFlood(const Packet* heard);
   uint32_t hopWaitMillis(int len_bytes) const;
@@ -241,7 +245,14 @@ protected:
     _hop_retries_max = MESH_HOP_RETRIES;
     _flood_cancel_k = 0;
     n_flood_cancels = 0;
+    _hop_busy_permille = 0;
+    n_hop_shed = 0;
   }
+
+  uint16_t getChannelLoad() const { return _load.permille(_ms->getMillis(), getReceiveAirTime()); }   // 0..1000
+  uint16_t getHopBusy() const { return _hop_busy_permille; }
+  void setHopBusy(uint16_t permille) { _hop_busy_permille = permille; }
+  uint32_t getNumHopShed() const { return n_hop_shed; }   // retries not sent because the channel was busy
 
   uint8_t getFloodCancel() const { return _flood_cancel_k; }
   void setFloodCancel(uint8_t k) { _flood_cancel_k = k; }

@@ -1113,6 +1113,14 @@ void MyMesh::sendSelfAdvertisement(int delay_millis, bool flood) {
   }
 }
 
+// A periodic advert is the first thing to give up when the channel is busy: it is most of what a repeater hears, and the next one
+// comes soon enough. Adverts sent on request (the `advert` command) are not held back.
+bool MyMesh::advertShed() {
+  if (_prefs.advert_busy == 0 || getChannelLoad() <= (uint16_t)_prefs.advert_busy * 10) return false;
+  n_advert_shed++;
+  return true;
+}
+
 void MyMesh::updateAdvertTimer() {
   if (_prefs.advert_interval > 0) { // schedule local advert timer
     next_local_advert = futureMillis(mesh::advertJitterMs(((uint32_t)_prefs.advert_interval) * 2 * 60 * 1000, getRNG()->nextInt(900, 1101)));
@@ -1186,6 +1194,8 @@ void MyMesh::formatFeaturesReply(char *reply) {
   addTo(reply, cap, "ping:%s ", _prefs.ping_en ? "on" : "off");
   if (getFloodCancel() == FLOOD_CANCEL_AUTO) addTo(reply, cap, "flood-k:auto (hears %d repeaters, dropped %lu) ", getRepeatersHeard(), (unsigned long)getNumFloodCancels());
   else if (getFloodCancel()) addTo(reply, cap, "flood-k:%d (dropped %lu) ", getFloodCancel(), (unsigned long)getNumFloodCancels());
+  if (_prefs.hop_busy || _prefs.advert_busy)
+    addTo(reply, cap, "busy:%d%% (shed retries %lu, adverts %lu) ", getChannelLoad() / 10, (unsigned long)getNumHopShed(), (unsigned long)n_advert_shed);
   if (routing) {
     uint32_t now = monoSeconds();
     addTo(reply, cap, "route:on (nbrs %d, clients %d, routes %d) routed:fwd %lu dlv %lu drop %lu", routing->links.count(), routing->attached.count(now),
@@ -1210,6 +1220,7 @@ void MyMesh::applyFeatureConfig() {
   setHopFallback(_prefs.hop_fallback != 0);
   setHopRescue(_prefs.hop_rescue != 0);
   setFloodCancel(_prefs.flood_cancel);
+  setHopBusy((uint16_t)_prefs.hop_busy * 10);
   const mesh::RouteConfigValues& v = _prefs.route_cfg;
   bool same = routing && routing_applied.id_bytes == v.id_bytes && routing_applied.full_period_s == v.full_period_s &&
               routing_applied.life_s == v.life_s && routing_applied.refresh_pct == v.refresh_pct &&
@@ -1594,14 +1605,14 @@ void MyMesh::loop() {
   if (routing) serviceRouting();
 
   if (next_flood_advert && millisHasNowPassed(next_flood_advert)) {
-    mesh::Packet *pkt = createSelfAdvert();
+    mesh::Packet *pkt = advertShed() ? NULL : createSelfAdvert();
     uint32_t delay_millis = 0;
     if (pkt) sendFloodScoped(default_scope, pkt, delay_millis, _prefs.path_hash_mode + 1);
 
     updateFloodAdvertTimer(); // schedule next flood advert
     updateAdvertTimer();      // also schedule local advert (so they don't overlap)
   } else if (next_local_advert && millisHasNowPassed(next_local_advert)) {
-    mesh::Packet *pkt = createSelfAdvert();
+    mesh::Packet *pkt = advertShed() ? NULL : createSelfAdvert();
     if (pkt) sendZeroHop(pkt);
 
     updateAdvertTimer(); // schedule next local advert

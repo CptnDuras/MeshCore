@@ -102,6 +102,8 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks
   uint32_t last_millis;
   uint64_t uptime_millis;
   unsigned long next_local_advert, next_flood_advert;
+  uint32_t n_advert_shed = 0;   // periodic adverts skipped because the channel was busy (advert.busy)
+  bool advertShed();
   bool _logging;
   NodePrefs _prefs;
   ClientACL  acl;

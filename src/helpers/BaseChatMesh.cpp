@@ -501,7 +501,17 @@ int  BaseChatMesh::sendMessage(const ContactInfo& recipient, uint32_t timestamp,
     txt_send_timeout = futureMillis(est_timeout = calcDirectTimeoutMillisFor(t, recipient.out_path_len));
     rc = MSG_SEND_SENT_DIRECT;
   }
+  spaceRetry(attempt, est_timeout);
   return rc;
+}
+
+// Waits a little longer before the next try, by a different amount each time and for each sender (ChannelLoad.h retrySpacingMs):
+// interference comes in bursts, and two senders that retry on the same clock collide again. The estimate the app is given grows with it.
+void BaseChatMesh::spaceRetry(uint8_t attempt, uint32_t& est_timeout) {
+  uint32_t extra = mesh::retrySpacingMs(attempt, _retry_spacing_ms, getRNG()->nextInt(500, 1501));
+  if (extra == 0) return;
+  est_timeout += extra;
+  txt_send_timeout = futureMillis(est_timeout);
 }
 
 // Sends pkt as a ROUTED envelope to dest's home repeater, if routing is on, we know where dest lives and our nearest repeater is known
@@ -549,6 +559,7 @@ int  BaseChatMesh::sendCommandData(const ContactInfo& recipient, uint32_t timest
     txt_send_timeout = futureMillis(est_timeout = calcDirectTimeoutMillisFor(t, recipient.out_path_len));
     rc = MSG_SEND_SENT_DIRECT;
   }
+  spaceRetry(attempt, est_timeout);
   return rc;
 }
 
