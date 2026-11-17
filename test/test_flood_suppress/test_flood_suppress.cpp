@@ -28,41 +28,102 @@ TEST(FloodCancelCopies, AutoFollowsTheTiers) {   // FSP-002
     EXPECT_EQ(1, floodCancelCopies(FLOOD_CANCEL_AUTO, 200));
 }
 
+// note a repeater by its hash, written as the bytes of a path
+static void note(HeardRepeaters& h, std::initializer_list<uint8_t> hash, uint32_t now_s) {
+    uint8_t b[3] = {0, 0, 0};
+    int n = 0;
+    for (uint8_t x : hash) b[n++] = x;
+    h.note(b, (uint8_t)n, now_s);
+}
+
 TEST(HeardRepeaters, CountsEachRepeaterOnce) {
     HeardRepeaters h;
     EXPECT_EQ(0, h.count(1000));
-    h.note(0x10, 1000);
-    h.note(0x10, 1010);
-    h.note(0x20, 1020);
+    note(h, {0x10}, 1000);
+    note(h, {0x10}, 1010);
+    note(h, {0x20}, 1020);
     EXPECT_EQ(2, h.count(1030));
 }
 
 TEST(HeardRepeaters, ARepeaterHeardTwentyFourHoursAndAMinuteAgoNoLongerCounts) {   // FSP-003
     HeardRepeaters h;
-    h.note(0x10, 600);                       // minute 10
+    note(h, {0x10}, 600);                    // minute 10
     EXPECT_EQ(1, h.count(600 + 24 * 3600));  // exactly 24 h later
     EXPECT_EQ(0, h.count(600 + 24 * 3600 + 60));
 }
 
 TEST(HeardRepeaters, HashZeroIsCounted) {
     HeardRepeaters h;
-    h.note(0x00, 5000);
-    h.note(0xFF, 5000);
+    note(h, {0x00}, 5000);
+    note(h, {0xFF}, 5000);
     EXPECT_EQ(2, h.count(5000));
 }
 
 TEST(HeardRepeaters, HearingAgainRefreshesTheEntry) {
     HeardRepeaters h;
-    h.note(0x33, 0);
-    h.note(0x33, 20 * 3600);
+    note(h, {0x33}, 0);
+    note(h, {0x33}, 20 * 3600);
     EXPECT_EQ(1, h.count(40 * 3600));
 }
 
 TEST(HeardRepeaters, ClearForgetsEverything) {
     HeardRepeaters h;
-    h.note(1, 100); h.note(2, 100);
+    note(h, {1}, 100); note(h, {2}, 100);
     h.clear();
     EXPECT_EQ(0, h.count(100));
+}
+
+TEST(HeardRepeaters, TwoByteHashesThatShareAFirstByteAreTwoRepeaters) {
+    HeardRepeaters h;
+    note(h, {0xA1, 0x01}, 100);
+    note(h, {0xA1, 0x02}, 100);
+    note(h, {0xA1, 0x01}, 110);
+    EXPECT_EQ(2, h.count(120));
+}
+
+TEST(HeardRepeaters, OneByteHashesThatShareAByteAreOneRepeater) {
+    HeardRepeaters h;
+    note(h, {0xA1}, 100);
+    note(h, {0xA1}, 100);
+    EXPECT_EQ(1, h.count(100));
+}
+
+TEST(HeardRepeaters, ThreeByteHashesAreComparedInFull) {
+    HeardRepeaters h;
+    note(h, {1, 2, 3}, 100);
+    note(h, {1, 2, 4}, 100);
+    note(h, {1, 3, 3}, 100);
+    EXPECT_EQ(3, h.count(100));
+}
+
+TEST(HeardRepeaters, ALongerHashAndTheShorterOneItStartsWithAreOneRepeater) {
+    HeardRepeaters h;
+    note(h, {0xA1}, 100);
+    note(h, {0xA1, 0x07}, 110);   // the same repeater, now in a flood with 2-byte hashes
+    EXPECT_EQ(1, h.count(120));
+    note(h, {0xA1, 0x08}, 130);   // a different repeater that starts the same way
+    EXPECT_EQ(2, h.count(140));
+}
+
+TEST(HeardRepeaters, ASizeOfZeroIsIgnoredAndALongOneIsCutToThree) {
+    HeardRepeaters h;
+    uint8_t b[5] = {9, 8, 7, 6, 5};
+    h.note(b, 0, 100);
+    EXPECT_EQ(0, h.count(100));
+    h.note(b, 5, 100);
+    uint8_t c[3] = {9, 8, 7};
+    h.note(c, 3, 110);
+    EXPECT_EQ(1, h.count(120));
+}
+
+TEST(HeardRepeaters, AFullTableReplacesTheRepeaterHeardLongestAgo) {
+    HeardRepeaters h;
+    for (int i = 0; i < HeardRepeaters::CAPACITY; i++) note(h, {(uint8_t)i, 0x55}, 60 + i * 60);
+    EXPECT_EQ(HeardRepeaters::CAPACITY, h.count(60 + 64 * 60));
+    note(h, {0xEE, 0xEE}, 60 + 70 * 60);   // replaces the one from minute 1
+    EXPECT_EQ(HeardRepeaters::CAPACITY, h.count(60 + 70 * 60));
+    note(h, {0x01, 0x55}, 60 + 71 * 60);   // the newest-but-one survived; this is heard again, so refreshed and not a new slot
+    EXPECT_EQ(HeardRepeaters::CAPACITY, h.count(60 + 71 * 60));
 }
 
 TEST(AdvertJitter, StaysWithinTenPercent) {   // ADJ-001

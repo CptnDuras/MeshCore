@@ -23,32 +23,54 @@ static inline uint8_t floodCancelCopies(uint8_t setting, int repeaters_heard) {
 }
 
 /**
- * \brief  The repeaters this node has heard passing on a flood in the last 24 hours, counted by the first byte of their hash.
+ * \brief  The repeaters this node has heard passing on a flood in the last 24 hours.
  *
- * A flood's path ends with the hash of the repeater that sent this copy, so the last hash is a neighbour we hear directly. Two
- * neighbours that share a first byte count once, which only makes the count a little low. Times are minutes in 16 bits, so an
- * entry older than 45 days could look recent again; a repeater that has not been heard for that long is not worth counting.
+ * A flood's path ends with the hash of the repeater that sent this copy, so the last hash is a neighbour we hear directly. The hash
+ * is as long as the path hash size the flood uses (1, 2 or 3 bytes: 2 or 4 or 6 hex characters), and the whole of it is compared, so
+ * with 2-byte hashes two repeaters that share a first byte are still two. Floods of different hash sizes can come from the same
+ * repeater: a shorter hash matches a longer one that starts with it, counts once, and the longer is kept.
+ *
+ * Fixed size, no heap. When the table is full the entry heard longest ago is replaced. Times are minutes in 16 bits, so an entry
+ * older than 45 days could look recent again; a repeater that has not been heard for that long is not worth counting.
  */
 class HeardRepeaters {
-  uint16_t at[256];
-  uint8_t used[32];
+public:
+  enum { CAPACITY = 64, WINDOW_MIN = 24 * 60 };
+
+private:
+  struct Entry { uint8_t hash[3]; uint8_t size; uint16_t at; };   // size 0: unused
+  Entry e[CAPACITY];
 
 public:
-  static const uint16_t WINDOW_MIN = 24 * 60;
-
   HeardRepeaters() { clear(); }
-  void clear() { memset(at, 0, sizeof(at)); memset(used, 0, sizeof(used)); }
+  void clear() { memset(e, 0, sizeof(e)); }
 
-  void note(uint8_t hash_first_byte, uint32_t now_s) {
-    at[hash_first_byte] = (uint16_t)(now_s / 60);
-    used[hash_first_byte >> 3] |= (uint8_t)(1 << (hash_first_byte & 7));
+  void note(const uint8_t* hash, uint8_t size, uint32_t now_s) {
+    if (size == 0) return;
+    if (size > 3) size = 3;
+    uint16_t now = (uint16_t)(now_s / 60);
+    int free_slot = -1, oldest = 0;
+    for (int i = 0; i < CAPACITY; i++) {
+      if (e[i].size == 0) { if (free_slot < 0) free_slot = i; continue; }
+      uint8_t n = e[i].size < size ? e[i].size : size;
+      if (memcmp(e[i].hash, hash, n) == 0) {
+        e[i].at = now;
+        if (size > e[i].size) { memcpy(e[i].hash, hash, size); e[i].size = size; }
+        return;
+      }
+      if ((uint16_t)(now - e[i].at) > (uint16_t)(now - e[oldest].at)) oldest = i;
+    }
+    Entry& s = e[free_slot >= 0 ? free_slot : oldest];
+    memcpy(s.hash, hash, size);
+    s.size = size;
+    s.at = now;
   }
 
   int count(uint32_t now_s) const {
     uint16_t now = (uint16_t)(now_s / 60);
     int n = 0;
-    for (int i = 0; i < 256; i++) {
-      if ((used[i >> 3] & (1 << (i & 7))) && (uint16_t)(now - at[i]) <= WINDOW_MIN) n++;
+    for (int i = 0; i < CAPACITY; i++) {
+      if (e[i].size && (uint16_t)(now - e[i].at) <= WINDOW_MIN) n++;
     }
     return n;
   }

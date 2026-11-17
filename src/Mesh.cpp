@@ -226,7 +226,8 @@ DispatcherAction Mesh::onRecvPacket(Packet* pkt) {
 
   if (pkt->isRouteFlood() && filterRecvFloodPacket(pkt)) return ACTION_RELEASE;
   if (pkt->isRouteFlood() && pkt->getPathHashCount() > 0) {   // the last hash is the repeater we heard this copy from
-    _heard_repeaters.note(pkt->path[(pkt->getPathHashCount() - 1) * pkt->getPathHashSize()], _ms->getMillis() / 1000);
+    uint8_t hs = pkt->getPathHashSize();
+    _heard_repeaters.note(&pkt->path[(pkt->getPathHashCount() - 1) * hs], hs, _ms->getMillis() / 1000);
   }
   if (_flood_cancel_k && pkt->isRouteFlood()) cancelQueuedFlood(pkt);
 
